@@ -133,11 +133,15 @@ export default function (pi: ExtensionAPI) {
   });
 
   // Keep the model's view of the cwd accurate (system prompt states the original).
+  // Rewriting the line costs one prompt-cache miss per directory change (prefix
+  // change), same as appending would — and avoids contradictory cwd signals.
   pi.on("before_agent_start", (event) => {
     if (!vcwd) return;
-    return {
-      systemPrompt: `${event.systemPrompt}\n\nThe working directory has been changed to: ${vcwd} (via change_dir). Relative paths and bash commands resolve there, not in the directory listed above.`,
-    };
+    const line = /^Current working directory: .*$/m;
+    const systemPrompt = line.test(event.systemPrompt)
+      ? event.systemPrompt.replace(line, `Current working directory: ${vcwd}`)
+      : `${event.systemPrompt}\n\nThe working directory has been changed to: ${vcwd} (via change_dir). Relative paths and bash commands resolve there.`;
+    return { systemPrompt };
   });
 
   pi.registerCommand("cwd", {

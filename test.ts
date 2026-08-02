@@ -72,8 +72,10 @@ assert.equal(event.input.path, join(worktree, "a.ts"));
 assert.equal(event.input.files[0].path, join(worktree, "b.ts"));
 assert.equal(event.input.files[1].path, "/abs/c.ts");
 
-// system prompt notes the override
-const r = await emit("before_agent_start", { systemPrompt: "base" });
+// system prompt: cwd line rewritten in place; fallback append when absent
+let r = await emit("before_agent_start", { systemPrompt: `intro\nCurrent working directory: ${sessionCwd}\noutro` });
+assert.equal(r.systemPrompt, `intro\nCurrent working directory: ${worktree}\noutro`);
+r = await emit("before_agent_start", { systemPrompt: "base" });
 assert.match(r.systemPrompt, new RegExp(worktree));
 
 // user bash follows the override
