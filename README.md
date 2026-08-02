@@ -32,7 +32,7 @@ Or for local development: `pi -e ./index.ts`
 
 ## Limitations
 
-- Custom tools from *other* extensions that take paths are not rewritten — they see the original session cwd.
+- Custom tools from *other* extensions that take paths are not rewritten — they see the original session cwd. Exception: `apply_edits` (pi-apply-edits) is recognized and rewritten (`path`, `files[].path`).
 - The footer `pwd` segment still shows the session cwd (pi renders it from the immutable `SessionManager`); the `cwd:` status segment shows the override.
 - Project trust, `.pi/extensions`, AGENTS.md, and skill discovery remain bound to the original session cwd.
 
