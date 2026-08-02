@@ -68,10 +68,10 @@ export default function (pi: ExtensionAPI) {
     name: "change_dir",
     label: "Change Directory",
     description:
-      "Change the working directory for all subsequent tool calls (bash, read, edit, write, ls, grep, find). Persists for the rest of the session until changed again. Accepts absolute, ~, or relative (to the current working directory) paths.",
+      "Change the working directory for all subsequent tool calls (bash, read, edit, write, ls, grep, find). Persists for the rest of the session until changed again. Accepts absolute, ~, or relative (to the current working directory) paths. Call it alone, not alongside other tool calls in the same message; it takes effect for later messages.",
     promptSnippet: "Change the working directory for subsequent tool calls",
     promptGuidelines: [
-      "Use change_dir once when work moves to another directory (e.g. a git worktree) instead of prefixing every bash command with cd.",
+      "Use change_dir once when work moves to another directory (e.g. a git worktree) instead of prefixing every bash command with cd. After it succeeds, run bash commands bare and use relative paths; do not add cd prefixes.",
     ],
     parameters: Type.Object({
       path: Type.String({ description: "Directory to switch to" }),
@@ -82,7 +82,7 @@ export default function (pi: ExtensionAPI) {
         content: [
           {
             type: "text",
-            text: `Working directory changed to ${target}. Relative paths and bash commands now resolve there.`,
+            text: `Working directory changed to ${target}. From your next message on, bash commands run there and relative paths resolve there — no cd prefix needed.`,
           },
         ],
       };
