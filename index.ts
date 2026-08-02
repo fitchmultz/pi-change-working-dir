@@ -89,25 +89,34 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // Rewrite built-in tool inputs to honor the virtual cwd.
+  // Rewrite tool inputs to honor the virtual cwd.
   pi.on("tool_call", (event) => {
     if (!vcwd) return;
+    const dir = vcwd;
+    const rewrite = (p: unknown): unknown => {
+      if (typeof p !== "string" || !p) return p;
+      const clean = expandTilde(p.startsWith("@") ? p.slice(1) : p);
+      return isAbsolute(clean) ? p : resolve(dir, clean);
+    };
     if (event.toolName === "bash") {
       const input = event.input as { command?: string };
       if (typeof input.command === "string") {
-        input.command = `cd ${shellQuote(vcwd)} || exit 1\n${input.command}`;
+        input.command = `cd ${shellQuote(dir)} || exit 1\n${input.command}`;
       }
     } else if (PATH_TOOLS.has(event.toolName)) {
       const input = event.input as { path?: string };
-      let p = input.path;
-      if (p === undefined) {
-        if (DEFAULT_PATH_TOOLS.has(event.toolName)) input.path = vcwd;
-        return;
+      if (input.path === undefined) {
+        if (DEFAULT_PATH_TOOLS.has(event.toolName)) input.path = dir;
+      } else {
+        input.path = rewrite(input.path) as string;
       }
-      if (typeof p !== "string") return;
-      if (p.startsWith("@")) p = p.slice(1); // read tool accepts @-prefixed paths
-      p = expandTilde(p);
-      if (!isAbsolute(p)) input.path = resolve(vcwd, p);
+    } else if (event.toolName === "apply_edits") {
+      // pi-apply-edits resolves relative paths against the session cwd
+      const input = event.input as { path?: unknown; files?: Array<{ path?: unknown }> };
+      input.path = rewrite(input.path);
+      if (Array.isArray(input.files)) {
+        for (const f of input.files) if (f && typeof f === "object") f.path = rewrite(f.path);
+      }
     }
   });
 

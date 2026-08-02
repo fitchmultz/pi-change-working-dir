@@ -65,6 +65,13 @@ event = { toolName: "grep", input: { pattern: "x" } };
 await emit("tool_call", event);
 assert.equal(event.input.path, worktree);
 
+// apply_edits (pi-apply-edits custom tool) paths rewritten too
+event = { toolName: "apply_edits", input: { path: "a.ts", files: [{ path: "b.ts" }, { path: "/abs/c.ts" }] } };
+await emit("tool_call", event);
+assert.equal(event.input.path, join(worktree, "a.ts"));
+assert.equal(event.input.files[0].path, join(worktree, "b.ts"));
+assert.equal(event.input.files[1].path, "/abs/c.ts");
+
 // system prompt notes the override
 const r = await emit("before_agent_start", { systemPrompt: "base" });
 assert.match(r.systemPrompt, new RegExp(worktree));
