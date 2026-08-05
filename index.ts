@@ -31,12 +31,15 @@ const shellQuote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 const expandTilde = (p: string) =>
   p === "~" ? homedir() : p.startsWith("~/") ? homedir() + p.slice(1) : p;
 
+const tildify = (p: string) =>
+  p === homedir() ? "~" : p.startsWith(homedir() + "/") ? "~" + p.slice(homedir().length) : p;
+
 export default function (pi: ExtensionAPI) {
   /** Active working directory override; undefined = session default. */
   let vcwd: string | undefined;
 
   const updateStatus = (ctx: ExtensionContext) => {
-    if (ctx.hasUI) ctx.ui.setStatus("cwd", vcwd ? `cwd: ${vcwd}` : undefined);
+    if (ctx.hasUI) ctx.ui.setStatus("cwd", vcwd ? `cwd: ${tildify(vcwd)}` : undefined);
   };
 
   const changeDir = (path: string, ctx: ExtensionContext): string => {

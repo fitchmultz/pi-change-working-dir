@@ -1,6 +1,6 @@
 {
   "name": "pi-change-working-dir",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Let Pi agents change their working directory mid-session (worktrees, monorepos) without restarting.",
   "type": "module",
