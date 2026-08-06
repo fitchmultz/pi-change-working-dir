@@ -7,15 +7,15 @@
  *   - bash: prepends `cd <dir> || exit 1`
  *   - read/write/edit/ls/grep/find: resolves relative paths against the dir
  *   - `!` user bash: runs in the dir
- * The dir persists in the session (survives resume/fork) and is shown in the
+ * The dir persists on each session branch (survives resume/fork/tree) and is shown in the
  * footer. `change_dir` tool for the agent, `/cwd [path]` for the user.
  */
-import { Type } from "@earendil-works/pi-ai";
 import {
   createLocalBashOperations,
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
@@ -53,8 +53,8 @@ export default function (pi: ExtensionAPI) {
     return target;
   };
 
-  // Restore persisted dir on startup/resume/fork (last entry on branch wins).
-  pi.on("session_start", (_event, ctx) => {
+  const restoreDir = (ctx: ExtensionContext) => {
+    vcwd = undefined;
     for (const entry of ctx.sessionManager.getBranch()) {
       if (entry.type === "custom" && entry.customType === ENTRY_TYPE) {
         vcwd = (entry.data as { dir?: string } | undefined)?.dir;
@@ -65,7 +65,11 @@ export default function (pi: ExtensionAPI) {
       vcwd = undefined;
     }
     updateStatus(ctx);
-  });
+  };
+
+  // Restore the active branch's persisted dir on startup/resume/fork and tree navigation.
+  pi.on("session_start", (_event, ctx) => restoreDir(ctx));
+  pi.on("session_tree", (_event, ctx) => restoreDir(ctx));
 
   pi.registerTool({
     name: "change_dir",
@@ -88,6 +92,7 @@ export default function (pi: ExtensionAPI) {
             text: `Working directory changed to ${target}. From your next message on, bash commands run there and relative paths resolve there — no cd prefix needed.`,
           },
         ],
+        details: {},
       };
     },
   });

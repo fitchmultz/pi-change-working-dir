@@ -1,101 +1,152 @@
-/** Self-check via pi's real extension loader: npm test */
+/** Self-check via Pi's real 0.84+ extension loader: npm test */
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { join } from "node:path";
+import {
+  DefaultResourceLoader,
+  SettingsManager,
+  VERSION as piVersion,
+} from "@earendil-works/pi-coding-agent";
 
-const piExecutable = execFileSync("which", ["pi"], { encoding: "utf8" }).trim();
-const piPackageRoot = dirname(dirname(realpathSync(piExecutable)));
-const { createExtensionRuntime, loadExtensions } = await import(
-	pathToFileURL(join(piPackageRoot, "dist/core/extensions/loader.js")).href
-);
+const [piMajor = 0, piMinor = 0] = piVersion.split(".").map(Number);
+assert.ok(piMajor > 0 || piMinor >= 84, `Pi 0.84.0 or later is required, found ${piVersion}`);
 
 const sessionCwd = realpathSync(mkdtempSync(join(tmpdir(), "cwd-session-")));
 const worktree = realpathSync(mkdtempSync(join(tmpdir(), "cwd-worktree-")));
+const agentDir = realpathSync(mkdtempSync(join(tmpdir(), "cwd-agent-")));
 
 const entries: any[] = [];
-const runtime = createExtensionRuntime();
-runtime.appendEntry = (customType: string, data: unknown) => entries.push({ type: "custom", customType, data });
-runtime.sendMessage = () => {};
+let branchEntries = entries;
+const statuses = new Map<string, string | undefined>();
+const notifications: string[] = [];
 
-const loaded = await loadExtensions([join(process.cwd(), "index.ts")], process.cwd(), undefined, runtime);
-assert.deepEqual(loaded.errors, []);
-const ext = loaded.extensions[0];
+const loadExtension = async () => {
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: process.cwd(),
+    agentDir,
+    settingsManager: SettingsManager.inMemory(),
+    additionalExtensionPaths: [join(process.cwd(), "index.ts")],
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+  });
+  await resourceLoader.reload({ resolveProjectTrust: async () => true });
+  const loaded = resourceLoader.getExtensions();
+  loaded.runtime.appendEntry = (customType: string, data: unknown) =>
+    entries.push({ type: "custom", customType, data });
+  loaded.runtime.sendMessage = () => {};
+  assert.deepEqual(loaded.errors, []);
+  return loaded.extensions[0]!;
+};
+
+const ext = await loadExtension();
 
 const ctx: any = {
-	cwd: sessionCwd,
-	hasUI: false,
-	ui: { setStatus: () => {}, notify: () => {} },
-	sessionManager: { getBranch: () => entries },
+  cwd: sessionCwd,
+  hasUI: true,
+  mode: "tui",
+  ui: {
+    setStatus: (key: string, value: string | undefined) => statuses.set(key, value),
+    notify: (message: string) => notifications.push(message),
+  },
+  sessionManager: { getBranch: () => branchEntries },
 };
-const emit = async (name: string, event: any) => {
-	let result;
-	for (const fn of ext.handlers.get(name) ?? []) result = await fn(event, ctx);
-	return result;
+const emit = async (extension: typeof ext, name: string, event: any): Promise<any> => {
+  let result: any;
+  for (const fn of extension.handlers.get(name) ?? []) result = await fn(event, ctx);
+  return result;
 };
 const changeDir = ext.tools.get("change_dir")!.definition;
 
-// No override: inputs untouched
+// No override: inputs untouched.
 let event: any = { toolName: "bash", input: { command: "ls" } };
-await emit("tool_call", event);
+await emit(ext, "tool_call", event);
 assert.equal(event.input.command, "ls");
 
-// change_dir validates
+// change_dir validates and switches.
 await assert.rejects(() => changeDir.execute("t0", { path: "/nope/nothing" }, undefined, undefined, ctx));
-
-// change_dir switches
 const res = await changeDir.execute("t1", { path: worktree }, undefined, undefined, ctx);
-assert.match(res.content[0].text, new RegExp(worktree));
+const firstContent = res.content[0];
+assert.equal(firstContent?.type, "text");
+assert.match(firstContent.text, new RegExp(worktree));
+assert.equal(statuses.get("cwd"), `cwd: ${worktree}`);
 
-// bash gets cd prefix
+// Bash gets a cwd prefix.
 event = { toolName: "bash", input: { command: "git status" } };
-await emit("tool_call", event);
+await emit(ext, "tool_call", event);
 assert.equal(event.input.command, `cd '${worktree}' || exit 1\ngit status`);
 
-// relative paths rewritten; absolute untouched; optional path defaulted
+// Relative paths are rewritten; absolute paths are untouched; optional paths default.
 event = { toolName: "read", input: { path: "src/main.ts" } };
-await emit("tool_call", event);
+await emit(ext, "tool_call", event);
 assert.equal(event.input.path, join(worktree, "src/main.ts"));
 event = { toolName: "edit", input: { path: "/abs/file.ts" } };
-await emit("tool_call", event);
+await emit(ext, "tool_call", event);
 assert.equal(event.input.path, "/abs/file.ts");
 event = { toolName: "grep", input: { pattern: "x" } };
-await emit("tool_call", event);
+await emit(ext, "tool_call", event);
 assert.equal(event.input.path, worktree);
 
-// apply_edits (pi-apply-edits custom tool) paths rewritten too
+// apply_edits paths are rewritten too.
 event = { toolName: "apply_edits", input: { path: "a.ts", files: [{ path: "b.ts" }, { path: "/abs/c.ts" }] } };
-await emit("tool_call", event);
+await emit(ext, "tool_call", event);
 assert.equal(event.input.path, join(worktree, "a.ts"));
 assert.equal(event.input.files[0].path, join(worktree, "b.ts"));
 assert.equal(event.input.files[1].path, "/abs/c.ts");
 
-// system prompt: cwd line rewritten in place; fallback append when absent
-let r = await emit("before_agent_start", { systemPrompt: `intro\nCurrent working directory: ${sessionCwd}\noutro` });
-assert.equal(r.systemPrompt, `intro\nCurrent working directory: ${worktree}\noutro`);
-r = await emit("before_agent_start", { systemPrompt: "base" });
-assert.match(r.systemPrompt, new RegExp(worktree));
+// The system prompt cwd is rewritten in place, with a fallback when the standard line is absent.
+let result = await emit(ext, "before_agent_start", {
+  systemPrompt: `intro\nCurrent working directory: ${sessionCwd}\noutro`,
+});
+assert.equal(result.systemPrompt, `intro\nCurrent working directory: ${worktree}\noutro`);
+result = await emit(ext, "before_agent_start", { systemPrompt: "base" });
+assert.match(result.systemPrompt, new RegExp(worktree));
 
-// user bash follows the override
-const ub = await emit("user_bash", { command: "pwd", cwd: sessionCwd });
-let ubOut = "";
-await ub.operations.exec("pwd", sessionCwd, { onData: (chunk: Buffer) => (ubOut += chunk) });
-assert.equal(ubOut.trim(), worktree);
+// User bash follows the override.
+const userBash = await emit(ext, "user_bash", { command: "pwd", cwd: sessionCwd });
+let userBashOutput = "";
+await userBash.operations.exec("pwd", sessionCwd, { onData: (chunk: Buffer) => (userBashOutput += chunk) });
+assert.equal(userBashOutput.trim(), worktree);
 
-// persisted + restored on session_start (fresh instance)
-const loaded2 = await loadExtensions([join(process.cwd(), "index.ts")], process.cwd(), undefined, runtime);
-const ext2 = loaded2.extensions[0];
-for (const fn of ext2.handlers.get("session_start")!) await fn({}, ctx);
+// A fresh extension instance restores the active branch.
+const ext2 = await loadExtension();
+await emit(ext2, "session_start", {});
 event = { toolName: "bash", input: { command: "pwd" } };
-for (const fn of ext2.handlers.get("tool_call")!) await fn(event, ctx);
+await emit(ext2, "tool_call", event);
 assert.equal(event.input.command, `cd '${worktree}' || exit 1\npwd`);
 
-// switching back to session cwd clears the override
-await changeDir.execute("t2", { path: sessionCwd }, undefined, undefined, ctx);
-event = { toolName: "bash", input: { command: "ls" } };
-await emit("tool_call", event);
-assert.equal(event.input.command, "ls");
+// Tree navigation restores the selected branch instead of leaking the old branch's cwd.
+branchEntries = [];
+await emit(ext2, "session_tree", {});
+event = { toolName: "bash", input: { command: "pwd" } };
+await emit(ext2, "tool_call", event);
+assert.equal(event.input.command, "pwd");
+branchEntries = entries;
+await emit(ext2, "session_tree", {});
+event = { toolName: "bash", input: { command: "pwd" } };
+await emit(ext2, "tool_call", event);
+assert.equal(event.input.command, `cd '${worktree}' || exit 1\npwd`);
 
-console.log("ok");
+// Missing persisted directories are rejected safely.
+branchEntries = [{ type: "custom", customType: "change-working-dir", data: { dir: "/nope/missing-cwd" } }];
+await emit(ext2, "session_tree", {});
+event = { toolName: "bash", input: { command: "pwd" } };
+await emit(ext2, "tool_call", event);
+assert.equal(event.input.command, "pwd");
+assert.match(notifications.at(-1)!, /Saved working directory is gone/);
+
+// Switching back to the session cwd clears the override and persists the reset.
+branchEntries = entries;
+await changeDir.execute("t2", { path: sessionCwd }, undefined, undefined, ctx);
+await emit(ext2, "session_tree", {});
+event = { toolName: "bash", input: { command: "ls" } };
+await emit(ext2, "tool_call", event);
+assert.equal(event.input.command, "ls");
+assert.equal(statuses.get("cwd"), undefined);
+
+rmSync(sessionCwd, { recursive: true, force: true });
+rmSync(worktree, { recursive: true, force: true });
+rmSync(agentDir, { recursive: true, force: true });
+console.log(`ok (Pi ${piVersion})`);
