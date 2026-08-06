@@ -163,14 +163,6 @@ export default function (pi: ExtensionAPI) {
       try {
         const target = changeDir(arg === "-" ? ctx.cwd : arg, ctx);
         ctx.ui.notify(`Working directory: ${target}`, "info");
-        pi.sendMessage(
-          {
-            customType: ENTRY_TYPE,
-            content: `The user changed the working directory to ${target}. Relative paths and bash commands now resolve there.`,
-            display: false,
-          },
-          { deliverAs: "nextTurn" },
-        );
       } catch (error) {
         ctx.ui.notify(String(error instanceof Error ? error.message : error), "error");
       }

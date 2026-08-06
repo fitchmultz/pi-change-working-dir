@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "test": "node --experimental-strip-types test.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc",
     "check": "npm run typecheck && npm test"
   },
   "pi": {

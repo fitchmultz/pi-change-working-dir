@@ -3,23 +3,18 @@ import assert from "node:assert/strict";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  DefaultResourceLoader,
-  SettingsManager,
-  VERSION as piVersion,
-} from "@earendil-works/pi-coding-agent";
-
-const [piMajor = 0, piMinor = 0] = piVersion.split(".").map(Number);
-assert.ok(piMajor > 0 || piMinor >= 84, `Pi 0.84.0 or later is required, found ${piVersion}`);
+import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 
 const sessionCwd = realpathSync(mkdtempSync(join(tmpdir(), "cwd-session-")));
 const worktree = realpathSync(mkdtempSync(join(tmpdir(), "cwd-worktree-")));
+const alternateWorktree = realpathSync(mkdtempSync(join(tmpdir(), "cwd-alternate-")));
 const agentDir = realpathSync(mkdtempSync(join(tmpdir(), "cwd-agent-")));
 
 const entries: any[] = [];
 let branchEntries = entries;
 const statuses = new Map<string, string | undefined>();
 const notifications: string[] = [];
+const sentMessages: unknown[] = [];
 
 const loadExtension = async () => {
   const resourceLoader = new DefaultResourceLoader({
@@ -32,11 +27,11 @@ const loadExtension = async () => {
     noThemes: true,
     noContextFiles: true,
   });
-  await resourceLoader.reload({ resolveProjectTrust: async () => true });
+  await resourceLoader.reload();
   const loaded = resourceLoader.getExtensions();
   loaded.runtime.appendEntry = (customType: string, data: unknown) =>
     entries.push({ type: "custom", customType, data });
-  loaded.runtime.sendMessage = () => {};
+  loaded.runtime.sendMessage = (message) => sentMessages.push(message);
   assert.deepEqual(loaded.errors, []);
   return loaded.extensions[0]!;
 };
@@ -117,13 +112,25 @@ event = { toolName: "bash", input: { command: "pwd" } };
 await emit(ext2, "tool_call", event);
 assert.equal(event.input.command, `cd '${worktree}' || exit 1\npwd`);
 
+// A command change followed by tree navigation keeps only the selected branch's cwd context.
+const worktreeBranch = [...entries];
+await ext2.commands.get("cwd")!.handler(alternateWorktree, ctx);
+result = await emit(ext2, "before_agent_start", { systemPrompt: "base" });
+assert.match(result.systemPrompt, new RegExp(alternateWorktree));
+branchEntries = worktreeBranch;
+await emit(ext2, "session_tree", {});
+result = await emit(ext2, "before_agent_start", { systemPrompt: "base" });
+assert.match(result.systemPrompt, new RegExp(worktree));
+assert.doesNotMatch(result.systemPrompt, new RegExp(alternateWorktree));
+assert.deepEqual(sentMessages, []);
+
 // Tree navigation restores the selected branch instead of leaking the old branch's cwd.
 branchEntries = [];
 await emit(ext2, "session_tree", {});
 event = { toolName: "bash", input: { command: "pwd" } };
 await emit(ext2, "tool_call", event);
 assert.equal(event.input.command, "pwd");
-branchEntries = entries;
+branchEntries = worktreeBranch;
 await emit(ext2, "session_tree", {});
 event = { toolName: "bash", input: { command: "pwd" } };
 await emit(ext2, "tool_call", event);
@@ -148,5 +155,6 @@ assert.equal(statuses.get("cwd"), undefined);
 
 rmSync(sessionCwd, { recursive: true, force: true });
 rmSync(worktree, { recursive: true, force: true });
+rmSync(alternateWorktree, { recursive: true, force: true });
 rmSync(agentDir, { recursive: true, force: true });
-console.log(`ok (Pi ${piVersion})`);
+console.log("ok");
