@@ -1,6 +1,6 @@
 {
   "name": "pi-change-working-dir",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "description": "Let Pi agents change their working directory mid-session (worktrees, monorepos) without restarting.",
   "type": "module",
@@ -10,7 +10,9 @@
     "pi-extension"
   ],
   "scripts": {
-    "test": "node --experimental-strip-types test.ts"
+    "test": "node --experimental-strip-types test.ts",
+    "typecheck": "tsc",
+    "check": "npm run typecheck && npm test"
   },
   "pi": {
     "extensions": [
@@ -18,15 +20,21 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "peerDependenciesMeta": {
-    "@earendil-works/pi-ai": {
-      "optional": true
-    },
     "@earendil-works/pi-coding-agent": {
       "optional": true
+    },
+    "typebox": {
+      "optional": true
     }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.0",
+    "@types/node": "24.12.4",
+    "typebox": "1.3.7",
+    "typescript": "5.9.3"
   }
 }

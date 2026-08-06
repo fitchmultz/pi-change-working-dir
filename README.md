@@ -2,7 +2,7 @@
 
 Let Pi agents change their working directory mid-session — no quitting, no `cd` prefix on every command. Built for git worktrees and monorepos.
 
-Pi bakes the session cwd into its built-in tools at session start ([`createBashToolDefinition(cwd)`](https://github.com/badlogic/pi-mono) closures — there is no built-in chdir). This extension keeps a **virtual cwd** and transparently rewrites tool inputs:
+Pi bakes the session cwd into its built-in tools at session start ([`createBashToolDefinition(cwd)`](https://github.com/earendil-works/pi/blob/v0.84.0/packages/coding-agent/src/core/tools/bash.ts) closures — there is no built-in chdir). This extension keeps a **virtual cwd** and transparently rewrites tool inputs:
 
 | Surface | Behavior |
 |---|---|
@@ -10,10 +10,14 @@ Pi bakes the session cwd into its built-in tools at session start ([`createBashT
 | `read` / `write` / `edit` | Relative paths resolve against the virtual cwd |
 | `ls` / `grep` / `find` | Relative + defaulted paths resolve against the virtual cwd |
 | `!cmd` user bash | Runs in the virtual cwd |
-| System prompt | Appends the active cwd so the model isn't misled by the baked-in one |
+| System prompt | Rewrites the active cwd so the model isn't misled by the baked-in one |
 | Footer | Shows `cwd: <dir>` while an override is active |
 
-The directory persists in the session file, so it survives `/resume` and `/fork`.
+The directory persists on each session branch, so it survives `/resume`, `/fork`, and `/tree` navigation.
+
+## Requirements
+
+Pi 0.84.0 or later.
 
 ## Usage
 
@@ -39,5 +43,6 @@ Or for local development: `pi -e ./index.ts`
 ## Test
 
 ```bash
-npm test
+npm install
+npm run check
 ```
