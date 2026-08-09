@@ -1,10 +1,24 @@
 {
   "name": "pi-change-working-dir",
-  "version": "0.2.0",
-  "private": true,
+  "version": "0.3.0",
   "description": "Let Pi agents change their working directory mid-session (worktrees, monorepos) without restarting.",
   "type": "module",
   "license": "MIT",
+  "author": "Mitch Fultz (https://github.com/fitchmultz)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fitchmultz/pi-change-working-dir.git"
+  },
+  "homepage": "https://github.com/fitchmultz/pi-change-working-dir#readme",
+  "bugs": {
+    "url": "https://github.com/fitchmultz/pi-change-working-dir/issues"
+  },
+  "files": [
+    "index.ts",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "keywords": [
     "pi-package",
     "pi-extension"
@@ -12,7 +26,12 @@
   "scripts": {
     "test": "node --experimental-strip-types test.ts",
     "typecheck": "tsc",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test && npm run pack:check",
+    "pack:check": "npm pack --dry-run",
+    "prepublishOnly": "npm run check"
+  },
+  "engines": {
+    "node": ">=22.19.0"
   },
   "pi": {
     "extensions": [

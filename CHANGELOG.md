@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 - 2026-08-09
+
+- Serialize native sibling tool calls around `change_dir`, preventing dependent calls from running in the previous directory.
+- Route `ffgrep`, `fffind`, and pi-subagents' `subagent` through the virtual working directory, including result rebasing and safe pagination for session descendants.
+- Canonicalize and validate accessible directories, reject control-character paths before they reach tools, support built-in `file://` paths, and avoid duplicate persistence entries.
+- Preserve literal leading `@` names for custom tools such as `apply_edits`; only Pi's built-ins treat `@` as path syntax.
+- Restore malformed session entries safely, clear stale footer state on shutdown, and rewrite Pi's authoritative final cwd prompt line.
+- Add package metadata and a minimal npm payload so the GitHub release is ready for later npm publication.
+- Document extension ordering, explicit parallel batches, FFF autocomplete, user-bash composition, and remaining project-scope limitations.
+
 ## 0.2.0 - 2026-08-06
 
 - Require Pi 0.84.0 or later.
