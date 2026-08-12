@@ -420,6 +420,7 @@ if (process.platform !== "win32") {
   assert.equal(await pwd(), worktree);
   assert.equal(await pwd(alternateWorktree), alternateWorktree);
   assert.throws(() => spawn("pwd", "oops" as never), { code: "ERR_INVALID_ARG_TYPE" });
+  assert.throws(() => spawn("pwd", [], null as never), { code: "ERR_INVALID_ARG_TYPE" });
 }
 
 // Control-character directories are rejected before their paths reach tools.

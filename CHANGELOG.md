@@ -2,7 +2,7 @@
 
 ## 0.4.0 - 2026-08-12
 
-- Patch `child_process.spawn` so `pi.exec` and other session-cwd or cwd-less spawns follow the virtual working directory. Explicit spawn `cwd` values other than the session directory are unchanged.
+- Patch `child_process.spawn` so `pi.exec` and other session-cwd or cwd-less spawns follow the virtual working directory on Node-hosted Pi. Explicit spawn `cwd` values other than the session directory are unchanged. Bun-hosted Pi cannot rebind an already-imported ESM `spawn`.
 
 ## 0.3.0 - 2026-08-09
 

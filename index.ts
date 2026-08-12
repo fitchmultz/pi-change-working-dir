@@ -129,7 +129,7 @@ const patchSpawn = () => {
     const { vcwd, sessionCwd } = holder.current();
     const i = Array.isArray(rest[0]) || rest[0] == null ? 1 : 0;
     const opts = rest[i];
-    if (vcwd && (opts == null || (typeof opts === "object" && !Array.isArray(opts)))) {
+    if (vcwd && (opts === undefined || (opts !== null && typeof opts === "object" && !Array.isArray(opts)))) {
       const options = opts as { cwd?: unknown } | undefined;
       const cwd = spawnPath(options?.cwd);
       if (options?.cwd == null || options.cwd === "" || (cwd && sessionCwd && sameDirectory(cwd, sessionCwd))) {
