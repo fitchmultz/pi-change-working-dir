@@ -545,6 +545,7 @@ if (process.platform !== "win32") {
   const patchedSpawn = spawn;
   const extReloaded = await loadExtension(reloadLoader);
   assert.equal(spawn, patchedSpawn);
+  assert.equal(await pwd(sessionCwd), sessionCwd);
   await extReloaded.tools.get("change_dir")!.definition.execute("reload-reset", { path: sessionCwd }, undefined, undefined, ctx);
   assert.equal(await pwd(sessionCwd), sessionCwd);
 }

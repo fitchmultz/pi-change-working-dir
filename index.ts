@@ -111,7 +111,7 @@ const spawnPath = (cwd: unknown): string | undefined => {
 const sameDirectory = (left: string, right: string): boolean =>
   left === right || (accessibleDirectory(left) ?? left) === (accessibleDirectory(right) ?? right);
 
-const SPAWN_PATCH = Symbol.for("pi-change-working-dir.spawn");
+const SPAWN_PATCH = Symbol.for("pi-change-working-dir.spawn.v1");
 // Last writer wins: one live extension instance per process.
 type SpawnHolder = { current: () => { vcwd?: string; sessionCwd?: string }; patched?: true };
 const spawnHolder = (): SpawnHolder => {
