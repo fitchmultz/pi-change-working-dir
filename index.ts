@@ -8,6 +8,7 @@
  *   - built-in and FFF file/search tools: resolve relative paths against the dir
  *   - apply_edits/subagent: rewrites their cwd-bearing inputs
  *   - `!` user bash: runs in the dir
+ *   - pi.exec / child_process.spawn: session cwd or omitted cwd → virtual cwd
  * The dir persists on each session branch (survives resume/fork/reload/tree) and is shown
  * in the footer. `change_dir` tool for the agent, `/cwd [path]` for the user.
  */
@@ -18,9 +19,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+
+const childProcess = createRequire(import.meta.url)("node:child_process") as typeof import("node:child_process");
 
 const ENTRY_TYPE = "change-working-dir";
 const FFF_TOOLS = new Set(["ffgrep", "fffind"]);
@@ -99,9 +103,54 @@ const accessibleDirectory = (path: string): string | undefined => {
   }
 };
 
+const spawnPath = (cwd: unknown): string | undefined => {
+  if (typeof cwd === "string") return cwd;
+  if (cwd instanceof URL) return fileURLToPath(cwd);
+};
+
+const sameDirectory = (left: string, right: string): boolean =>
+  left === right || (accessibleDirectory(left) ?? left) === (accessibleDirectory(right) ?? right);
+
+const SPAWN_PATCH = Symbol.for("pi-change-working-dir.spawn.v1");
+// Last writer wins: one live extension instance per process.
+type SpawnHolder = { current: () => { vcwd?: string; sessionCwd?: string }; patched?: true };
+const spawnHolder = (): SpawnHolder => {
+  const g = globalThis as typeof globalThis & { [SPAWN_PATCH]?: SpawnHolder };
+  return (g[SPAWN_PATCH] ??= { current: () => ({}) });
+};
+
+const patchSpawn = () => {
+  const holder = spawnHolder();
+  if (holder.patched) return;
+  holder.patched = true;
+  const spawn = childProcess.spawn as (...args: unknown[]) => ReturnType<typeof childProcess.spawn>;
+  // ponytail: spawn only; patch exec/execFile/Bun.spawn if those show up
+  childProcess.spawn = function (this: unknown, command: string, ...rest: unknown[]) {
+    const { vcwd, sessionCwd } = holder.current();
+    const i = Array.isArray(rest[0]) || rest[0] == null ? 1 : 0;
+    const opts = rest[i];
+    if (vcwd && (opts === undefined || (opts !== null && typeof opts === "object" && !Array.isArray(opts)))) {
+      const options = opts as { cwd?: unknown } | undefined;
+      const cwd = spawnPath(options?.cwd);
+      if (options?.cwd == null || options.cwd === "" || (cwd && sessionCwd && sameDirectory(cwd, sessionCwd))) {
+        rest[i] = { ...(options ?? {}), cwd: vcwd };
+      }
+    }
+    return spawn.apply(this, [command, ...rest]);
+  } as typeof childProcess.spawn;
+  syncBuiltinESMExports();
+};
+
 export default function (pi: ExtensionAPI) {
   /** Active working directory override; undefined = session default. */
   let vcwd: string | undefined;
+  let sessionCwd: string | undefined;
+  const readState = () => ({ vcwd, sessionCwd });
+  const publish = () => {
+    spawnHolder().current = readState;
+    if (vcwd) patchSpawn();
+  };
+  publish();
   let persistedDir: string | undefined;
   let persistedStateValid = true;
   type FffCursorState = {
@@ -120,7 +169,12 @@ export default function (pi: ExtensionAPI) {
     if (ctx.hasUI) ctx.ui.setStatus("cwd", vcwd ? `cwd: ${tildify(vcwd)}` : undefined);
   };
 
+  const rememberSession = (ctx: ExtensionContext) => {
+    sessionCwd = accessibleDirectory(ctx.cwd) ?? ctx.cwd;
+  };
+
   const changeDir = (path: string, ctx: ExtensionContext): string => {
+    rememberSession(ctx);
     if (!path) throw new Error("Path is required");
     const requested = resolve(vcwd ?? ctx.cwd, expandTilde(path));
     const target = accessibleDirectory(requested);
@@ -130,7 +184,7 @@ export default function (pi: ExtensionAPI) {
       throw new Error(`Directory paths with control characters are not supported: ${displayed}`);
     }
 
-    const next = target === (accessibleDirectory(ctx.cwd) ?? ctx.cwd) ? undefined : target;
+    const next = sameDirectory(target, ctx.cwd) ? undefined : target;
     if (next !== vcwd || next !== persistedDir || !persistedStateValid) {
       vcwd = next;
       persistedDir = next;
@@ -138,10 +192,12 @@ export default function (pi: ExtensionAPI) {
       pi.appendEntry(ENTRY_TYPE, { dir: vcwd });
       updateStatus(ctx);
     }
+    publish();
     return target;
   };
 
   const restoreDir = (ctx: ExtensionContext) => {
+    rememberSession(ctx);
     vcwd = undefined;
     persistedDir = undefined;
     persistedStateValid = true;
@@ -166,12 +222,13 @@ export default function (pi: ExtensionAPI) {
       persistedDir = saved;
       const target = accessibleDirectory(saved);
       if (target && escapeControl(target) === target) {
-        vcwd = target === (accessibleDirectory(ctx.cwd) ?? ctx.cwd) ? undefined : target;
+        vcwd = sameDirectory(target, ctx.cwd) ? undefined : target;
       } else if (ctx.hasUI) {
         ctx.ui.notify(`Saved working directory unavailable or unsupported; using the session directory: ${escapeControl(saved)}`, "warning");
       }
     }
     updateStatus(ctx);
+    publish();
   };
 
   // Restore the active branch's persisted dir on startup/resume/fork and tree navigation.
@@ -179,6 +236,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_tree", (_event, ctx) => restoreDir(ctx));
   pi.on("session_shutdown", (_event, ctx) => {
     if (ctx.hasUI) ctx.ui.setStatus("cwd", undefined);
+    const holder = spawnHolder();
+    if (holder.current === readState) holder.current = () => ({});
   });
 
   pi.registerTool({

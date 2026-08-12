@@ -1,5 +1,6 @@
 /** Self-check via Pi's real 0.84+ extension loader: npm test */
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, sep } from "node:path";
@@ -21,17 +22,17 @@ const statuses = new Map<string, string | undefined>();
 const notifications: string[] = [];
 const sentMessages: unknown[] = [];
 
-const loadExtension = async () => {
-  const resourceLoader = new DefaultResourceLoader({
-    cwd: process.cwd(),
-    agentDir,
-    settingsManager: SettingsManager.inMemory(),
-    additionalExtensionPaths: [join(process.cwd(), "index.ts")],
-    noSkills: true,
-    noPromptTemplates: true,
-    noThemes: true,
-    noContextFiles: true,
-  });
+const createLoader = () => new DefaultResourceLoader({
+  cwd: process.cwd(),
+  agentDir,
+  settingsManager: SettingsManager.inMemory(),
+  additionalExtensionPaths: [join(process.cwd(), "index.ts")],
+  noSkills: true,
+  noPromptTemplates: true,
+  noThemes: true,
+  noContextFiles: true,
+});
+const loadExtension = async (resourceLoader = createLoader()) => {
   await resourceLoader.reload();
   const loaded = resourceLoader.getExtensions();
   loaded.runtime.appendEntry = (customType: string, data: unknown) =>
@@ -58,11 +59,21 @@ const emit = async (extension: typeof ext, name: string, event: any): Promise<an
   for (const fn of extension.handlers.get(name) ?? []) result = await fn(event, ctx);
   return result;
 };
+const pwd = (cwd?: string, asOptions = false) => new Promise<string>((resolve, reject) => {
+  const child = cwd === undefined ? spawn("pwd") : asOptions ? spawn("pwd", { cwd }) : spawn("pwd", [], { cwd });
+  let out = "";
+  child.stdout?.on("data", (chunk: Buffer) => {
+    out += chunk;
+  });
+  child.on("error", reject);
+  child.on("close", () => resolve(realpathSync(out.trim() || ".")));
+});
 const changeDir = ext.tools.get("change_dir")!.definition;
 assert.equal(changeDir.executionMode, "sequential");
 
 // No override: inputs remain untouched.
 let event: any = { toolName: "bash", input: { command: "ls" } };
+if (process.platform !== "win32") assert.equal(await pwd(sessionCwd), sessionCwd);
 await emit(ext, "tool_call", event);
 assert.equal(event.input.command, "ls");
 const rootCursorInput = { path: "src/", exclude: "test/" };
@@ -403,6 +414,14 @@ const userBash = await emit(ext, "user_bash", { command: "pwd", cwd: sessionCwd 
 let userBashOutput = "";
 await userBash.operations.exec("pwd", sessionCwd, { onData: (chunk: Buffer) => (userBashOutput += chunk) });
 assert.equal(userBashOutput.trim(), worktree);
+if (process.platform !== "win32") {
+  assert.equal(await pwd(sessionCwd), worktree);
+  assert.equal(await pwd(sessionCwd, true), worktree);
+  assert.equal(await pwd(), worktree);
+  assert.equal(await pwd(alternateWorktree), alternateWorktree);
+  assert.throws(() => spawn("pwd", "oops" as never), { code: "ERR_INVALID_ARG_TYPE" });
+  assert.throws(() => spawn("pwd", [], null as never), { code: "ERR_INVALID_ARG_TYPE" });
+}
 
 // Control-character directories are rejected before their paths reach tools.
 if (process.platform !== "win32") {
@@ -511,12 +530,26 @@ await emit(ext2, "session_tree", {});
 assert.equal(statuses.get("cwd"), `cwd: ${worktree}`);
 await emit(ext2, "session_shutdown", {});
 assert.equal(statuses.get("cwd"), undefined);
+if (process.platform !== "win32") assert.equal(await pwd(sessionCwd), sessionCwd);
 branchEntries = entries;
 await changeDir2.execute("t7", { path: sessionCwd }, undefined, undefined, ctx);
 event = { toolName: "bash", input: { command: "ls" } };
 await emit(ext2, "tool_call", event);
 assert.equal(event.input.command, "ls");
 assert.equal(statuses.get("cwd"), undefined);
+if (process.platform !== "win32") {
+  assert.equal(await pwd(sessionCwd), sessionCwd);
+  const reloadLoader = createLoader();
+  const extReload = await loadExtension(reloadLoader);
+  await extReload.tools.get("change_dir")!.definition.execute("reload-set", { path: worktree }, undefined, undefined, ctx);
+  assert.equal(await pwd(sessionCwd), worktree);
+  const patchedSpawn = spawn;
+  const extReloaded = await loadExtension(reloadLoader);
+  assert.equal(spawn, patchedSpawn);
+  assert.equal(await pwd(sessionCwd), sessionCwd);
+  await extReloaded.tools.get("change_dir")!.definition.execute("reload-reset", { path: sessionCwd }, undefined, undefined, ctx);
+  assert.equal(await pwd(sessionCwd), sessionCwd);
+}
 
 rmSync(sessionCwd, { recursive: true, force: true });
 rmSync(spacedSessionCwd, { recursive: true, force: true });
