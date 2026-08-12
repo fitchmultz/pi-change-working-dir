@@ -419,6 +419,7 @@ if (process.platform !== "win32") {
   assert.equal(await pwd(sessionCwd, true), worktree);
   assert.equal(await pwd(), worktree);
   assert.equal(await pwd(alternateWorktree), alternateWorktree);
+  assert.throws(() => spawn("pwd", "oops" as never), { code: "ERR_INVALID_ARG_TYPE" });
 }
 
 // Control-character directories are rejected before their paths reach tools.
@@ -528,6 +529,7 @@ await emit(ext2, "session_tree", {});
 assert.equal(statuses.get("cwd"), `cwd: ${worktree}`);
 await emit(ext2, "session_shutdown", {});
 assert.equal(statuses.get("cwd"), undefined);
+if (process.platform !== "win32") assert.equal(await pwd(sessionCwd), sessionCwd);
 branchEntries = entries;
 await changeDir2.execute("t7", { path: sessionCwd }, undefined, undefined, ctx);
 event = { toolName: "bash", input: { command: "ls" } };
@@ -540,7 +542,9 @@ if (process.platform !== "win32") {
   const extReload = await loadExtension(reloadLoader);
   await extReload.tools.get("change_dir")!.definition.execute("reload-set", { path: worktree }, undefined, undefined, ctx);
   assert.equal(await pwd(sessionCwd), worktree);
+  const patchedSpawn = spawn;
   const extReloaded = await loadExtension(reloadLoader);
+  assert.equal(spawn, patchedSpawn);
   await extReloaded.tools.get("change_dir")!.definition.execute("reload-reset", { path: sessionCwd }, undefined, undefined, ctx);
   assert.equal(await pwd(sessionCwd), sessionCwd);
 }

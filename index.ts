@@ -112,6 +112,7 @@ const sameDirectory = (left: string, right: string): boolean =>
   left === right || (accessibleDirectory(left) ?? left) === (accessibleDirectory(right) ?? right);
 
 const SPAWN_PATCH = Symbol.for("pi-change-working-dir.spawn");
+// Last writer wins: one live extension instance per process.
 type SpawnHolder = { current: () => { vcwd?: string; sessionCwd?: string }; patched?: true };
 const spawnHolder = (): SpawnHolder => {
   const g = globalThis as typeof globalThis & { [SPAWN_PATCH]?: SpawnHolder };
@@ -124,14 +125,18 @@ const patchSpawn = () => {
   holder.patched = true;
   const spawn = childProcess.spawn as (...args: unknown[]) => ReturnType<typeof childProcess.spawn>;
   // ponytail: spawn only; patch exec/execFile/Bun.spawn if those show up
-  childProcess.spawn = function (this: unknown, command: string, args?: unknown, options?: unknown) {
+  childProcess.spawn = function (this: unknown, command: string, ...rest: unknown[]) {
     const { vcwd, sessionCwd } = holder.current();
-    const argv = Array.isArray(args) ? args : [];
-    const opts = (Array.isArray(args) || args == null ? options : args) as { cwd?: unknown } | undefined;
-    const cwd = spawnPath(opts?.cwd);
-    const omitted = opts?.cwd == null || opts?.cwd === "";
-    const rewrite = Boolean(vcwd) && (omitted || Boolean(cwd && sessionCwd && sameDirectory(cwd, sessionCwd)));
-    return spawn.call(this, command, argv, rewrite ? { ...(opts ?? {}), cwd: vcwd } : opts);
+    const i = Array.isArray(rest[0]) || rest[0] == null ? 1 : 0;
+    const opts = rest[i];
+    if (vcwd && (opts == null || (typeof opts === "object" && !Array.isArray(opts)))) {
+      const options = opts as { cwd?: unknown } | undefined;
+      const cwd = spawnPath(options?.cwd);
+      if (options?.cwd == null || options.cwd === "" || (cwd && sessionCwd && sameDirectory(cwd, sessionCwd))) {
+        rest[i] = { ...(options ?? {}), cwd: vcwd };
+      }
+    }
+    return spawn.apply(this, [command, ...rest]);
   } as typeof childProcess.spawn;
   syncBuiltinESMExports();
 };
@@ -140,8 +145,12 @@ export default function (pi: ExtensionAPI) {
   /** Active working directory override; undefined = session default. */
   let vcwd: string | undefined;
   let sessionCwd: string | undefined;
-  spawnHolder().current = () => ({ vcwd, sessionCwd });
-  patchSpawn();
+  const readState = () => ({ vcwd, sessionCwd });
+  const publish = () => {
+    spawnHolder().current = readState;
+    if (vcwd) patchSpawn();
+  };
+  publish();
   let persistedDir: string | undefined;
   let persistedStateValid = true;
   type FffCursorState = {
@@ -183,6 +192,7 @@ export default function (pi: ExtensionAPI) {
       pi.appendEntry(ENTRY_TYPE, { dir: vcwd });
       updateStatus(ctx);
     }
+    publish();
     return target;
   };
 
@@ -218,6 +228,7 @@ export default function (pi: ExtensionAPI) {
       }
     }
     updateStatus(ctx);
+    publish();
   };
 
   // Restore the active branch's persisted dir on startup/resume/fork and tree navigation.
@@ -225,6 +236,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_tree", (_event, ctx) => restoreDir(ctx));
   pi.on("session_shutdown", (_event, ctx) => {
     if (ctx.hasUI) ctx.ui.setStatus("cwd", undefined);
+    const holder = spawnHolder();
+    if (holder.current === readState) holder.current = () => ({});
   });
 
   pi.registerTool({
