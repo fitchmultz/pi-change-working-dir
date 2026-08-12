@@ -8,6 +8,7 @@
  *   - built-in and FFF file/search tools: resolve relative paths against the dir
  *   - apply_edits/subagent: rewrites their cwd-bearing inputs
  *   - `!` user bash: runs in the dir
+ *   - pi.exec / child_process.spawn: session cwd or omitted cwd → virtual cwd
  * The dir persists on each session branch (survives resume/fork/reload/tree) and is shown
  * in the footer. `change_dir` tool for the agent, `/cwd [path]` for the user.
  */
@@ -18,9 +19,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+
+const childProcess = createRequire(import.meta.url)("node:child_process") as typeof import("node:child_process");
 
 const ENTRY_TYPE = "change-working-dir";
 const FFF_TOOLS = new Set(["ffgrep", "fffind"]);
@@ -99,9 +103,45 @@ const accessibleDirectory = (path: string): string | undefined => {
   }
 };
 
+const spawnCwd = (cwd: unknown): string | undefined | false => {
+  if (cwd === undefined || cwd === null || cwd === "") return undefined;
+  if (typeof cwd === "string") return cwd;
+  if (cwd instanceof URL) return fileURLToPath(cwd);
+  return false;
+};
+
+const sameDirectory = (left: string, right: string): boolean =>
+  left === right || (accessibleDirectory(left) ?? left) === (accessibleDirectory(right) ?? right);
+
+// Latest factory wins so /reload and a second test instance keep spawn in sync.
+let readSpawnState = (): { vcwd?: string; sessionCwd?: string } => ({});
+let spawnPatched = false;
+
+const patchSpawn = () => {
+  if (spawnPatched) return;
+  spawnPatched = true;
+  const spawn = childProcess.spawn as (...args: unknown[]) => ReturnType<typeof childProcess.spawn>;
+  // ponytail: spawn only; patch exec/execFile/Bun.spawn if those show up
+  childProcess.spawn = function (this: unknown, command: string, args?: unknown, options?: unknown) {
+    const { vcwd, sessionCwd } = readSpawnState();
+    const twoArg = args !== undefined && !Array.isArray(args);
+    const opts = (twoArg ? args : options) as { cwd?: unknown } | undefined;
+    const cwd = spawnCwd(opts?.cwd);
+    const rewrite = Boolean(vcwd) && cwd !== false
+      && (cwd === undefined || Boolean(sessionCwd && sameDirectory(cwd, sessionCwd)));
+    if (!rewrite) return spawn.call(this, command, args, options);
+    const next = { ...(opts ?? {}), cwd: vcwd };
+    return twoArg ? spawn.call(this, command, next) : spawn.call(this, command, args ?? [], next);
+  } as typeof childProcess.spawn;
+  syncBuiltinESMExports();
+};
+
 export default function (pi: ExtensionAPI) {
   /** Active working directory override; undefined = session default. */
   let vcwd: string | undefined;
+  let sessionCwd: string | undefined;
+  readSpawnState = () => ({ vcwd, sessionCwd });
+  patchSpawn();
   let persistedDir: string | undefined;
   let persistedStateValid = true;
   type FffCursorState = {
@@ -120,7 +160,12 @@ export default function (pi: ExtensionAPI) {
     if (ctx.hasUI) ctx.ui.setStatus("cwd", vcwd ? `cwd: ${tildify(vcwd)}` : undefined);
   };
 
+  const rememberSession = (ctx: ExtensionContext) => {
+    sessionCwd = accessibleDirectory(ctx.cwd) ?? ctx.cwd;
+  };
+
   const changeDir = (path: string, ctx: ExtensionContext): string => {
+    rememberSession(ctx);
     if (!path) throw new Error("Path is required");
     const requested = resolve(vcwd ?? ctx.cwd, expandTilde(path));
     const target = accessibleDirectory(requested);
@@ -142,6 +187,7 @@ export default function (pi: ExtensionAPI) {
   };
 
   const restoreDir = (ctx: ExtensionContext) => {
+    rememberSession(ctx);
     vcwd = undefined;
     persistedDir = undefined;
     persistedStateValid = true;

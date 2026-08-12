@@ -13,6 +13,7 @@ Pi bakes the session cwd into its built-in tools at session start ([`createBashT
 | `apply_edits` | `path` and `files[].path` resolve against the virtual cwd |
 | `subagent` (pi-subagents) | Omitted or relative top-level `cwd` resolves against the virtual cwd |
 | `!cmd` user bash | Runs in the virtual cwd |
+| `pi.exec` / `spawn` | Session cwd or omitted cwd is rewritten to the virtual cwd |
 | System prompt | Rewrites the active cwd so the model isn't misled by the baked-in one |
 | Footer | Shows `cwd: <dir>` while an override is active |
 
@@ -39,7 +40,7 @@ Or for local development: `pi -e ./index.ts`
 
 ## Limitations
 
-- Custom tools other than `apply_edits`, `ffgrep`, `fffind`, and pi-subagents' `subagent` still receive Pi's original session cwd.
+- Custom tools other than `apply_edits`, `ffgrep`, `fffind`, and pi-subagents' `subagent` still receive Pi's original session cwd in their tool context. `pi.exec` and other `child_process.spawn` calls that omit `cwd` or pass the session directory follow the virtual cwd. Explicit spawn `cwd` values other than the session directory are left alone. `exec`, `execFile`, and `Bun.spawn` are not patched.
 - FFF tool calls follow the virtual cwd, but FFF's interactive `@file` autocomplete remains indexed from the original session cwd. Outside that tree, FFF can reuse a cached broader auxiliary index after moving deeper, broadening search scope and returning broader-root-relative paths; `/reload` clears that cache.
 - FFF's query grammar cannot safely represent path constraints containing whitespace or a leading `!`; those calls are blocked with guidance to start Pi at the intended search root or use the built-in search tools. File-scoped `ffgrep` fuzzy fallbacks that would broaden beyond the requested file are also blocked. FFF treats whitespace and commas as separators inside every `exclude` value, including array items.
 - Only the default `ffgrep` and `fffind` names receive FFF-specific scoping and result rebasing. `PI_FFF_MODE=override` and `multi_grep` are not supported.
