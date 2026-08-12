@@ -103,35 +103,35 @@ const accessibleDirectory = (path: string): string | undefined => {
   }
 };
 
-const spawnCwd = (cwd: unknown): string | undefined | false => {
-  if (cwd === undefined || cwd === null || cwd === "") return undefined;
+const spawnPath = (cwd: unknown): string | undefined => {
   if (typeof cwd === "string") return cwd;
   if (cwd instanceof URL) return fileURLToPath(cwd);
-  return false;
 };
 
 const sameDirectory = (left: string, right: string): boolean =>
   left === right || (accessibleDirectory(left) ?? left) === (accessibleDirectory(right) ?? right);
 
-// Latest factory wins so /reload and a second test instance keep spawn in sync.
-let readSpawnState = (): { vcwd?: string; sessionCwd?: string } => ({});
-let spawnPatched = false;
+const SPAWN_PATCH = Symbol.for("pi-change-working-dir.spawn");
+type SpawnHolder = { current: () => { vcwd?: string; sessionCwd?: string }; patched?: true };
+const spawnHolder = (): SpawnHolder => {
+  const g = globalThis as typeof globalThis & { [SPAWN_PATCH]?: SpawnHolder };
+  return (g[SPAWN_PATCH] ??= { current: () => ({}) });
+};
 
 const patchSpawn = () => {
-  if (spawnPatched) return;
-  spawnPatched = true;
+  const holder = spawnHolder();
+  if (holder.patched) return;
+  holder.patched = true;
   const spawn = childProcess.spawn as (...args: unknown[]) => ReturnType<typeof childProcess.spawn>;
   // ponytail: spawn only; patch exec/execFile/Bun.spawn if those show up
   childProcess.spawn = function (this: unknown, command: string, args?: unknown, options?: unknown) {
-    const { vcwd, sessionCwd } = readSpawnState();
-    const twoArg = args !== undefined && !Array.isArray(args);
-    const opts = (twoArg ? args : options) as { cwd?: unknown } | undefined;
-    const cwd = spawnCwd(opts?.cwd);
-    const rewrite = Boolean(vcwd) && cwd !== false
-      && (cwd === undefined || Boolean(sessionCwd && sameDirectory(cwd, sessionCwd)));
-    if (!rewrite) return spawn.call(this, command, args, options);
-    const next = { ...(opts ?? {}), cwd: vcwd };
-    return twoArg ? spawn.call(this, command, next) : spawn.call(this, command, args ?? [], next);
+    const { vcwd, sessionCwd } = holder.current();
+    const argv = Array.isArray(args) ? args : [];
+    const opts = (Array.isArray(args) || args == null ? options : args) as { cwd?: unknown } | undefined;
+    const cwd = spawnPath(opts?.cwd);
+    const omitted = opts?.cwd == null || opts?.cwd === "";
+    const rewrite = Boolean(vcwd) && (omitted || Boolean(cwd && sessionCwd && sameDirectory(cwd, sessionCwd)));
+    return spawn.call(this, command, argv, rewrite ? { ...(opts ?? {}), cwd: vcwd } : opts);
   } as typeof childProcess.spawn;
   syncBuiltinESMExports();
 };
@@ -140,7 +140,7 @@ export default function (pi: ExtensionAPI) {
   /** Active working directory override; undefined = session default. */
   let vcwd: string | undefined;
   let sessionCwd: string | undefined;
-  readSpawnState = () => ({ vcwd, sessionCwd });
+  spawnHolder().current = () => ({ vcwd, sessionCwd });
   patchSpawn();
   let persistedDir: string | undefined;
   let persistedStateValid = true;
@@ -175,7 +175,7 @@ export default function (pi: ExtensionAPI) {
       throw new Error(`Directory paths with control characters are not supported: ${displayed}`);
     }
 
-    const next = target === (accessibleDirectory(ctx.cwd) ?? ctx.cwd) ? undefined : target;
+    const next = sameDirectory(target, ctx.cwd) ? undefined : target;
     if (next !== vcwd || next !== persistedDir || !persistedStateValid) {
       vcwd = next;
       persistedDir = next;
@@ -212,7 +212,7 @@ export default function (pi: ExtensionAPI) {
       persistedDir = saved;
       const target = accessibleDirectory(saved);
       if (target && escapeControl(target) === target) {
-        vcwd = target === (accessibleDirectory(ctx.cwd) ?? ctx.cwd) ? undefined : target;
+        vcwd = sameDirectory(target, ctx.cwd) ? undefined : target;
       } else if (ctx.hasUI) {
         ctx.ui.notify(`Saved working directory unavailable or unsupported; using the session directory: ${escapeControl(saved)}`, "warning");
       }

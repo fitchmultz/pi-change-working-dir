@@ -22,17 +22,17 @@ const statuses = new Map<string, string | undefined>();
 const notifications: string[] = [];
 const sentMessages: unknown[] = [];
 
-const loadExtension = async () => {
-  const resourceLoader = new DefaultResourceLoader({
-    cwd: process.cwd(),
-    agentDir,
-    settingsManager: SettingsManager.inMemory(),
-    additionalExtensionPaths: [join(process.cwd(), "index.ts")],
-    noSkills: true,
-    noPromptTemplates: true,
-    noThemes: true,
-    noContextFiles: true,
-  });
+const createLoader = () => new DefaultResourceLoader({
+  cwd: process.cwd(),
+  agentDir,
+  settingsManager: SettingsManager.inMemory(),
+  additionalExtensionPaths: [join(process.cwd(), "index.ts")],
+  noSkills: true,
+  noPromptTemplates: true,
+  noThemes: true,
+  noContextFiles: true,
+});
+const loadExtension = async (resourceLoader = createLoader()) => {
   await resourceLoader.reload();
   const loaded = resourceLoader.getExtensions();
   loaded.runtime.appendEntry = (customType: string, data: unknown) =>
@@ -59,8 +59,8 @@ const emit = async (extension: typeof ext, name: string, event: any): Promise<an
   for (const fn of extension.handlers.get(name) ?? []) result = await fn(event, ctx);
   return result;
 };
-const pwd = (cwd?: string) => new Promise<string>((resolve, reject) => {
-  const child = cwd === undefined ? spawn("pwd") : spawn("pwd", [], { cwd });
+const pwd = (cwd?: string, asOptions = false) => new Promise<string>((resolve, reject) => {
+  const child = cwd === undefined ? spawn("pwd") : asOptions ? spawn("pwd", { cwd }) : spawn("pwd", [], { cwd });
   let out = "";
   child.stdout?.on("data", (chunk: Buffer) => {
     out += chunk;
@@ -416,6 +416,7 @@ await userBash.operations.exec("pwd", sessionCwd, { onData: (chunk: Buffer) => (
 assert.equal(userBashOutput.trim(), worktree);
 if (process.platform !== "win32") {
   assert.equal(await pwd(sessionCwd), worktree);
+  assert.equal(await pwd(sessionCwd, true), worktree);
   assert.equal(await pwd(), worktree);
   assert.equal(await pwd(alternateWorktree), alternateWorktree);
 }
@@ -533,7 +534,16 @@ event = { toolName: "bash", input: { command: "ls" } };
 await emit(ext2, "tool_call", event);
 assert.equal(event.input.command, "ls");
 assert.equal(statuses.get("cwd"), undefined);
-if (process.platform !== "win32") assert.equal(await pwd(sessionCwd), sessionCwd);
+if (process.platform !== "win32") {
+  assert.equal(await pwd(sessionCwd), sessionCwd);
+  const reloadLoader = createLoader();
+  const extReload = await loadExtension(reloadLoader);
+  await extReload.tools.get("change_dir")!.definition.execute("reload-set", { path: worktree }, undefined, undefined, ctx);
+  assert.equal(await pwd(sessionCwd), worktree);
+  const extReloaded = await loadExtension(reloadLoader);
+  await extReloaded.tools.get("change_dir")!.definition.execute("reload-reset", { path: sessionCwd }, undefined, undefined, ctx);
+  assert.equal(await pwd(sessionCwd), sessionCwd);
+}
 
 rmSync(sessionCwd, { recursive: true, force: true });
 rmSync(spacedSessionCwd, { recursive: true, force: true });
