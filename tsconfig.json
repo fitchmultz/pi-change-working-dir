@@ -8,5 +8,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["index.ts", "test.ts"]
+  "include": ["index.ts", "test.ts", "test-bash.ts"]
 }

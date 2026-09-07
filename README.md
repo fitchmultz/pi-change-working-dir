@@ -2,11 +2,11 @@
 
 Let Pi agents change their working directory mid-session — no quitting, no `cd` prefix on every command. Built for git worktrees and monorepos.
 
-Pi bakes the session cwd into its built-in tools at session start ([`createBashToolDefinition(cwd)`](https://github.com/earendil-works/pi/blob/v0.84.0/packages/coding-agent/src/core/tools/bash.ts) closures — there is no built-in chdir). This extension keeps a **virtual cwd** and transparently rewrites tool inputs:
+Pi's session cwd stays tied to the directory where the session started. This extension keeps a **virtual cwd** and routes tool calls there:
 
 | Surface | Behavior |
 |---|---|
-| `bash` | Prepends `cd <dir> \|\| exit 1` to every command |
+| `bash` | Uses Pi's native cwd hook when available, before directory checks; also prefixes `cd <dir> \|\| exit 1` for older hosts and custom tools |
 | `read` / `write` / `edit` | Relative paths resolve against the virtual cwd |
 | `ls` / `grep` / `find` | Relative + defaulted paths resolve against the virtual cwd |
 | `ffgrep` / `fffind` | Searches are rooted in the virtual cwd |
@@ -21,7 +21,7 @@ The directory is validated, canonicalized, and persisted on each session branch,
 
 ## Requirements
 
-Pi 0.84.0 or later.
+Pi 0.84.0 or later. Running Bash after the original session directory is removed requires Pi's optional `registerBashCwdHook` API ([native change](https://github.com/fitchmultz/pi/pull/14)). The extension detects that method; hosts without it retain the older routing and require the original directory to remain accessible.
 
 ## Usage
 
@@ -38,6 +38,8 @@ Pi 0.84.0 or later.
 
 Or for local development: `pi -e ./index.ts`
 
+Restart Pi after updating extension code; `/reload` reinitializes the already loaded code.
+
 ## Limitations
 
 - Custom tools other than `apply_edits`, `ffgrep`, `fffind`, and pi-subagents' `subagent` still receive Pi's original session cwd in their tool context. On Node-hosted Pi, `pi.exec` and other `child_process.spawn` calls that omit `cwd` or pass the session directory follow the virtual cwd. Explicit spawn `cwd` values other than the session directory are left alone. Bun-hosted Pi keeps its original ESM `spawn` binding, so `pi.exec` stays on the session directory there. `exec`, `execFile`, `spawnSync`, and `Bun.spawn` are not patched.
@@ -46,7 +48,7 @@ Or for local development: `pi -e ./index.ts`
 - Only the default `ffgrep` and `fffind` names receive FFF-specific scoping and result rebasing. `PI_FFF_MODE=override` and `multi_grep` are not supported.
 - Explicit parallel wrappers can still race `change_dir`; Pi's native sibling calls are serialized because the tool declares sequential execution.
 - Pi runs `tool_call` handlers in extension load order. Load this extension before path-policy extensions so they inspect rewritten paths. This extension is not a sandbox.
-- Pi's `user_bash` hook is first-result-wins. While a virtual cwd is active, this extension supplies the `!cmd` executor, so order it deliberately relative to sandbox or remote-shell extensions. That executor uses Pi's default detected Bash because extension context does not expose a configured `shellPath`.
+- With the native cwd hook, `!cmd` retains Pi's configured shell and any executor selected by another `user_bash` handler. On older hosts, this extension supplies the `!cmd` executor while a virtual cwd is active: `user_bash` is first-result-wins, so order it deliberately relative to sandbox or remote-shell extensions. That legacy executor uses Pi's default detected Bash, not the configured `shellPath`.
 - `/cwd` feedback uses Pi UI notifications; in print/JSON mode use the model-callable `change_dir` tool instead.
 - An unavailable saved directory falls back to the session cwd without deleting the saved branch state; a later reload can restore it after the path returns.
 - If an active directory is later deleted or loses access, tool calls fail closed until it is restored or reset with `/cwd -`.
@@ -59,4 +61,10 @@ Or for local development: `pi -e ./index.ts`
 ```bash
 npm install
 npm run check
+```
+
+Run the deleted-original-directory regression against a Pi build that exposes the native cwd hook:
+
+```bash
+PI_PACKAGE_DIR=/absolute/path/to/pi/packages/coding-agent npm run test:bash
 ```

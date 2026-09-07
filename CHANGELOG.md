@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1 - 2026-09-06
+
+- Use Pi's optional native Bash cwd hook before directory checks, so Bash keeps working after the original session directory is removed.
+- Preserve the configured shell and selected `user_bash` executor on hook-capable hosts. Older hosts retain legacy routing and still require the original session directory.
+- Add a native integration regression covering removed directories, shell configuration, session environment, and custom user Bash operations.
+
 ## 0.4.0 - 2026-08-12
 
 - Patch `child_process.spawn` so `pi.exec` and other session-cwd or cwd-less spawns follow the virtual working directory on Node-hosted Pi. Explicit spawn `cwd` values other than the session directory are unchanged. Bun-hosted Pi cannot rebind an already-imported ESM `spawn`.

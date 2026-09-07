@@ -2,9 +2,9 @@
  * pi-change-working-dir: let the agent (and user) change the session's
  * effective working directory without restarting pi.
  *
- * pi bakes the session cwd into its built-in tools at session start. This
- * extension keeps a "virtual cwd" and rewrites tool inputs on the fly:
- *   - bash: prepends `cd <dir> || exit 1`
+ * Pi keeps the session cwd fixed. This extension tracks a "virtual cwd" and
+ * routes subsequent tools there:
+ *   - bash: uses the native cwd hook when available; also prefixes `cd` for custom/older tools
  *   - built-in and FFF file/search tools: resolve relative paths against the dir
  *   - apply_edits/subagent: rewrites their cwd-bearing inputs
  *   - `!` user bash: runs in the dir
@@ -141,9 +141,13 @@ const patchSpawn = () => {
   syncBuiltinESMExports();
 };
 
-export default function (pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI & {
+  registerBashCwdHook?: (hook: (cwd: string) => string) => void;
+}) {
   /** Active working directory override; undefined = session default. */
   let vcwd: string | undefined;
+  const nativeBashCwd = typeof pi.registerBashCwdHook === "function";
+  if (nativeBashCwd) pi.registerBashCwdHook?.((cwd) => vcwd ?? cwd);
   let sessionCwd: string | undefined;
   const readState = () => ({ vcwd, sessionCwd });
   const publish = () => {
@@ -412,9 +416,9 @@ export default function (pi: ExtensionAPI) {
     };
   });
 
-  // `!command` from the user follows the virtual cwd too.
+  // Older hosts need an executor override; the native hook preserves the selected executor.
   pi.on("user_bash", () => {
-    if (!vcwd) return;
+    if (nativeBashCwd || !vcwd) return;
     const dir = vcwd;
     return {
       operations: {
