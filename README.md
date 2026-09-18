@@ -9,7 +9,7 @@ Pi's session cwd stays tied to the directory where the session started. This ext
 | `bash` | Uses Pi's native cwd hook when available, before directory checks; also prefixes `cd <dir> \|\| exit 1` for older hosts and custom tools |
 | `read` / `write` / `edit` | Relative paths resolve against the virtual cwd |
 | `ls` / `grep` / `find` | Relative + defaulted paths resolve against the virtual cwd |
-| `ffgrep` / `fffind` | Searches are rooted in the virtual cwd |
+| `ffgrep` / `fffind` | Path constraints follow the virtual cwd; see the search limitations below |
 | `apply_edits` | `path` and `files[].path` resolve against the virtual cwd |
 | `subagent` (pi-subagents) | Omitted or relative top-level `cwd` resolves against the virtual cwd |
 | `!cmd` user bash | Runs in the virtual cwd |
@@ -43,7 +43,7 @@ Restart Pi after updating extension code; `/reload` reinitializes the already lo
 ## Limitations
 
 - Custom tools other than `apply_edits`, `ffgrep`, `fffind`, and pi-subagents' `subagent` still receive Pi's original session cwd in their tool context. On Node-hosted Pi, `pi.exec` and other `child_process.spawn` calls that omit `cwd` or pass the session directory follow the virtual cwd. Explicit spawn `cwd` values other than the session directory are left alone. Bun-hosted Pi keeps its original ESM `spawn` binding, so `pi.exec` stays on the session directory there. `exec`, `execFile`, `spawnSync`, and `Bun.spawn` are not patched.
-- FFF tool calls follow the virtual cwd, but FFF's interactive `@file` autocomplete remains indexed from the original session cwd. Outside that tree, FFF can reuse a cached broader auxiliary index after moving deeper, broadening search scope and returning broader-root-relative paths; `/reload` clears that cache.
+- FFF has unresolved search-scoping and result-path bugs after directory changes. Directory constraints can include files outside the virtual cwd, and searches across index roots can return paths that resolve to a different file in subsequent tools. Use the built-in search tools when reliable scoping is required. `/reload` clears FFF's auxiliary index cache but does not fix these bugs. FFF's interactive `@file` autocomplete also remains indexed from the original session cwd.
 - FFF's query grammar cannot safely represent path constraints containing whitespace or a leading `!`; those calls are blocked with guidance to start Pi at the intended search root or use the built-in search tools. File-scoped `ffgrep` fuzzy fallbacks that would broaden beyond the requested file are also blocked. FFF treats whitespace and commas as separators inside every `exclude` value, including array items.
 - Only the default `ffgrep` and `fffind` names receive FFF-specific scoping and result rebasing. `PI_FFF_MODE=override` and `multi_grep` are not supported.
 - Explicit parallel wrappers can still race `change_dir`; Pi's native sibling calls are serialized because the tool declares sequential execution.
@@ -51,7 +51,7 @@ Restart Pi after updating extension code; `/reload` reinitializes the already lo
 - With the native cwd hook, `!cmd` retains Pi's configured shell and any executor selected by another `user_bash` handler. On older hosts, this extension supplies the `!cmd` executor while a virtual cwd is active: `user_bash` is first-result-wins, so order it deliberately relative to sandbox or remote-shell extensions. That legacy executor uses Pi's default detected Bash, not the configured `shellPath`.
 - `/cwd` feedback uses Pi UI notifications; in print/JSON mode use the model-callable `change_dir` tool instead.
 - An unavailable saved directory falls back to the session cwd without deleting the saved branch state; a later reload can restore it after the path returns.
-- If an active directory is later deleted or loses access, tool calls fail closed until it is restored or reset with `/cwd -`.
+- If the effective working directory is deleted or loses access, the listed file/search tools, `apply_edits`, and `subagent` are blocked until it is restored or an accessible directory is selected with `change_dir` or `/cwd`. This applies to absolute paths too: alternate spellings and host-specific normalization must not recreate a removed worktree.
 - The footer `pwd` segment still shows the immutable session cwd; the `cwd:` status segment shows the override.
 - Project trust, `.pi/extensions`, AGENTS.md, skill discovery, and other project-scoped extension state remain bound to the original session cwd.
 - Windows is not currently tested.

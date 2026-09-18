@@ -273,6 +273,11 @@ export default function (pi: ExtensionAPI & {
 
   // Rewrite tool inputs to honor the virtual cwd.
   pi.on("tool_call", (event, ctx) => {
+    const routesPaths = PATH_TOOLS.has(event.toolName) || event.toolName === "apply_edits" || event.toolName === "subagent";
+    const activeDir = vcwd ?? ctx.cwd;
+    if (routesPaths && !accessibleDirectory(activeDir)) {
+      throw new Error(`Working directory unavailable: ${escapeControl(activeDir)}. Restore it or use change_dir to select another directory.`);
+    }
     if (FFF_TOOLS.has(event.toolName)) {
       const input = event.input as { path?: string; exclude?: string | string[]; cursor?: string };
       if (input.cursor) {

@@ -1,6 +1,6 @@
 /** Native Bash integration: PI_PACKAGE_DIR=/path/to/pi/packages/coding-agent npm run test:bash */
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, realpathSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -102,6 +102,11 @@ try {
       assert.ok(error.message.includes(target), error.message);
       return true;
     });
+    await assert.rejects(
+      () => execute("write", { path: "result.txt", content: "must not recreate the worktree" }),
+      /Working directory unavailable/,
+    );
+    assert.equal(existsSync(target), false);
     await execute("change_dir", { path: alternate });
     assert.equal(await execute("bash", { command }), `${alternate}\nkept\n${alternate}\n${session.sessionId}`);
     assert.equal(await runUserBash(), `${alternate}\nkept\n${alternate}`);

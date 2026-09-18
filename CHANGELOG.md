@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2 - 2026-09-18
+
+- Require an accessible working directory for filesystem, edit, and subagent calls, preventing writes from silently recreating a removed worktree without Git metadata. Absolute paths also require recovery with `change_dir` or restoration of the directory, covering path aliases and host-specific normalization.
+- Document the unresolved FFF search-scoping and result-path bugs after directory changes.
+
 ## 0.4.1 - 2026-09-06
 
 - Use Pi's optional native Bash cwd hook before directory checks, so Bash keeps working after the original session directory is removed.
