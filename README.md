@@ -51,7 +51,7 @@ Restart Pi after updating extension code; `/reload` reinitializes the already lo
 - With the native cwd hook, `!cmd` retains Pi's configured shell and any executor selected by another `user_bash` handler. On older hosts, this extension supplies the `!cmd` executor while a virtual cwd is active: `user_bash` is first-result-wins, so order it deliberately relative to sandbox or remote-shell extensions. That legacy executor uses Pi's default detected Bash, not the configured `shellPath`.
 - `/cwd` feedback uses Pi UI notifications; in print/JSON mode use the model-callable `change_dir` tool instead.
 - An unavailable saved directory falls back to the session cwd without deleting the saved branch state; a later reload can restore it after the path returns.
-- If the effective working directory is deleted or loses access, built-in filesystem tools, `apply_edits`, and `subagent` are blocked until it is restored or an accessible directory is selected with `change_dir` or `/cwd`. This applies to absolute paths too: alternate spellings and host-specific normalization must not recreate a removed worktree.
+- If the effective working directory is deleted or loses access, the listed file/search tools, `apply_edits`, and `subagent` are blocked until it is restored or an accessible directory is selected with `change_dir` or `/cwd`. This applies to absolute paths too: alternate spellings and host-specific normalization must not recreate a removed worktree.
 - The footer `pwd` segment still shows the immutable session cwd; the `cwd:` status segment shows the override.
 - Project trust, `.pi/extensions`, AGENTS.md, skill discovery, and other project-scoped extension state remain bound to the original session cwd.
 - Windows is not currently tested.
