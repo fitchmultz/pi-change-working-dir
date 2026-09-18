@@ -527,7 +527,7 @@ assert.equal(event.input.command, "pwd");
 // A removed active directory must not be recreated by write's recursive mkdir.
 const removedDir = join(worktree, "removed-worktree");
 mkdirSync(removedDir);
-await changeDir2.execute("removed-set", { path: removedDir }, undefined, undefined, ctx);
+await changeDir2.execute("removed-set", { path: join(worktreeLink, "removed-worktree") }, undefined, undefined, ctx);
 rmdirSync(removedDir);
 const write = createWriteTool(sessionCwd);
 const routedWrite = async (path: string) => {
@@ -537,6 +537,10 @@ const routedWrite = async (path: string) => {
 };
 await assert.rejects(() => routedWrite("result.txt"), /Working directory unavailable/);
 await assert.rejects(() => routedWrite(join(removedDir, "result.txt")), /Working directory unavailable/);
+await assert.rejects(
+  () => routedWrite(join(worktreeLink, "removed-worktree", "nested", "result.txt")),
+  /Working directory unavailable/,
+);
 assert.equal(existsSync(removedDir), false);
 // An explicit destination outside the unavailable cwd remains usable.
 await routedWrite(join(alternateWorktree, "outside.txt"));
