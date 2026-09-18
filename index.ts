@@ -293,6 +293,11 @@ export default function (pi: ExtensionAPI & {
       const hadAtPrefix = stripAtPrefix && p.startsWith("@");
       const raw = hadAtPrefix ? p.slice(1) : p;
       const clean = raw.startsWith("file://") ? fileURLToPath(raw) : expandTilde(raw);
+      const fromDir = relative(dir, resolve(dir, clean));
+      if ((!isAbsolute(clean) || (fromDir !== ".." && !fromDir.startsWith(`..${sep}`) && !isAbsolute(fromDir)))
+        && !accessibleDirectory(dir)) {
+        throw new Error(`Working directory unavailable: ${escapeControl(dir)}. Restore it or use change_dir to select another directory.`);
+      }
       if (!isAbsolute(clean)) return resolve(dir, clean);
       return hadAtPrefix && clean === raw ? p : clean;
     };
@@ -312,7 +317,7 @@ export default function (pi: ExtensionAPI & {
       const fff = FFF_TOOLS.has(event.toolName);
       const originalPath = input.path;
       const resolvedPath = DEFAULT_PATH_TOOLS.has(event.toolName) && (input.path === undefined || input.path === "")
-        ? dir
+        ? rewrite(".") as string
         : rewrite(input.path, !fff) as string | undefined;
       const scopedPath = fff && resolvedPath ? relativeToSession(resolvedPath) : undefined;
       const unsafeFffPath = fff && (
@@ -364,7 +369,7 @@ export default function (pi: ExtensionAPI & {
     } else if (event.toolName === "subagent") {
       // pi-subagents resolves all nested cwd values from its top-level cwd.
       const input = event.input as { cwd?: unknown };
-      input.cwd = input.cwd === undefined || input.cwd === "" ? dir : rewrite(input.cwd);
+      input.cwd = rewrite(input.cwd === undefined || input.cwd === "" ? "." : input.cwd);
     }
   });
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2 - 2026-09-18
+
+- Reject file-tool calls that depend on an unavailable active directory, preventing writes from silently recreating a removed worktree without Git metadata. Explicit absolute destinations outside that directory remain usable.
+- Document the unresolved FFF search-scoping and result-path bugs after directory changes.
+
 ## 0.4.1 - 2026-09-06
 
 - Use Pi's optional native Bash cwd hook before directory checks, so Bash keeps working after the original session directory is removed.

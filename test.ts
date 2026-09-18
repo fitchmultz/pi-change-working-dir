@@ -1,11 +1,11 @@
 /** Self-check via Pi's real 0.84+ extension loader: npm test */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, symlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { createWriteTool, DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 
 const sessionCwd = realpathSync(mkdtempSync(join(tmpdir(), "cwd-session-")));
 const spacedSessionCwd = realpathSync(mkdtempSync(join(tmpdir(), "cwd session ")));
@@ -523,6 +523,27 @@ await emit(ext2, "session_tree", {});
 event = { toolName: "bash", input: { command: "pwd" } };
 await emit(ext2, "tool_call", event);
 assert.equal(event.input.command, "pwd");
+
+// A removed active directory must not be recreated by write's recursive mkdir.
+const removedDir = join(worktree, "removed-worktree");
+mkdirSync(removedDir);
+await changeDir2.execute("removed-set", { path: removedDir }, undefined, undefined, ctx);
+rmdirSync(removedDir);
+const write = createWriteTool(sessionCwd);
+const routedWrite = async (path: string) => {
+  const event = { toolName: "write", input: { path, content: "kept\n" } };
+  await emit(ext2, "tool_call", event);
+  return write.execute("removed-write", event.input);
+};
+await assert.rejects(() => routedWrite("result.txt"), /Working directory unavailable/);
+await assert.rejects(() => routedWrite(join(removedDir, "result.txt")), /Working directory unavailable/);
+assert.equal(existsSync(removedDir), false);
+// An explicit destination outside the unavailable cwd remains usable.
+await routedWrite(join(alternateWorktree, "outside.txt"));
+assert.equal(readFileSync(join(alternateWorktree, "outside.txt"), "utf8"), "kept\n");
+mkdirSync(removedDir);
+await routedWrite("result.txt");
+assert.equal(readFileSync(join(removedDir, "result.txt"), "utf8"), "kept\n");
 
 // Shutdown clears stale footer state, and resetting to the session cwd persists.
 branchEntries = worktreeBranch;
