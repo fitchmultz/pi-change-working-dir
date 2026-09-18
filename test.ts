@@ -525,9 +525,10 @@ await emit(ext2, "tool_call", event);
 assert.equal(event.input.command, "pwd");
 
 // A removed active directory must not be recreated by write's recursive mkdir.
-const removedDir = join(worktree, "removed-worktree");
+const removedName = "Removed worktrée";
+const removedDir = join(worktree, removedName);
 mkdirSync(removedDir);
-await changeDir2.execute("removed-set", { path: join(worktreeLink, "removed-worktree") }, undefined, undefined, ctx);
+await changeDir2.execute("removed-set", { path: join(worktreeLink, removedName) }, undefined, undefined, ctx);
 rmdirSync(removedDir);
 const write = createWriteTool(sessionCwd);
 const routedWrite = async (path: string) => {
@@ -536,18 +537,26 @@ const routedWrite = async (path: string) => {
   return write.execute("removed-write", event.input);
 };
 await assert.rejects(() => routedWrite("result.txt"), /Working directory unavailable/);
-await assert.rejects(() => routedWrite(join(removedDir, "result.txt")), /Working directory unavailable/);
-await assert.rejects(
-  () => routedWrite(join(worktreeLink, "removed-worktree", "nested", "result.txt")),
-  /Working directory unavailable/,
-);
+for (const path of [
+  join(removedDir, "result.txt"),
+  join(worktreeLink, removedName, "nested", "result.txt"),
+  join(worktree, removedName.toLowerCase(), "result.txt"),
+  join(worktree, removedName.normalize("NFD"), "result.txt"),
+  join(worktree, removedName.replace(" ", "\u00a0"), "result.txt"),
+  join(alternateWorktree, "outside.txt"),
+]) {
+  await assert.rejects(() => routedWrite(path), /Working directory unavailable/, path);
+}
 assert.equal(existsSync(removedDir), false);
-// An explicit destination outside the unavailable cwd remains usable.
-await routedWrite(join(alternateWorktree, "outside.txt"));
-assert.equal(readFileSync(join(alternateWorktree, "outside.txt"), "utf8"), "kept\n");
+assert.equal(existsSync(join(alternateWorktree, "outside.txt")), false);
+// Restoring the path recovers without a reset; selecting another cwd also recovers.
 mkdirSync(removedDir);
 await routedWrite("result.txt");
 assert.equal(readFileSync(join(removedDir, "result.txt"), "utf8"), "kept\n");
+rmSync(removedDir, { recursive: true });
+await changeDir2.execute("removed-recover", { path: alternateWorktree }, undefined, undefined, ctx);
+await routedWrite(join(alternateWorktree, "outside.txt"));
+assert.equal(readFileSync(join(alternateWorktree, "outside.txt"), "utf8"), "kept\n");
 
 // Shutdown clears stale footer state, and resetting to the session cwd persists.
 branchEntries = worktreeBranch;
@@ -576,7 +585,15 @@ if (process.platform !== "win32") {
   assert.equal(await pwd(sessionCwd), sessionCwd);
 }
 
+// The session directory is also the effective cwd after an explicit reset.
 rmSync(sessionCwd, { recursive: true, force: true });
+await assert.rejects(() => routedWrite("result.txt"), /Working directory unavailable/);
+assert.equal(existsSync(sessionCwd), false);
+await changeDir2.execute("missing-session-recover", { path: worktree }, undefined, undefined, ctx);
+await routedWrite("recovered.txt");
+assert.equal(readFileSync(join(worktree, "recovered.txt"), "utf8"), "kept\n");
+await emit(ext2, "session_shutdown", {});
+
 rmSync(spacedSessionCwd, { recursive: true, force: true });
 rmSync(worktree, { recursive: true, force: true });
 rmSync(alternateWorktree, { recursive: true, force: true });

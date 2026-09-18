@@ -2,7 +2,7 @@
 
 ## 0.4.2 - 2026-09-18
 
-- Reject file-tool calls that depend on an unavailable active directory, preventing writes from silently recreating a removed worktree without Git metadata. Explicit absolute destinations outside that directory remain usable.
+- Require an accessible working directory for filesystem, edit, and subagent calls, preventing writes from silently recreating a removed worktree without Git metadata. Absolute paths also require recovery with `change_dir` or restoration of the directory, covering path aliases and host-specific normalization.
 - Document the unresolved FFF search-scoping and result-path bugs after directory changes.
 
 ## 0.4.1 - 2026-09-06

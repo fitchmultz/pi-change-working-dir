@@ -103,16 +103,6 @@ const accessibleDirectory = (path: string): string | undefined => {
   }
 };
 
-// A missing child still has aliases such as /tmp and /private/tmp in its existing parents.
-const realPathWithMissingTail = (path: string): string => {
-  try {
-    return realpathSync(path);
-  } catch {
-    const parent = dirname(path);
-    return parent === path ? path : resolve(realPathWithMissingTail(parent), basename(path));
-  }
-};
-
 const spawnPath = (cwd: unknown): string | undefined => {
   if (typeof cwd === "string") return cwd;
   if (cwd instanceof URL) return fileURLToPath(cwd);
@@ -283,6 +273,11 @@ export default function (pi: ExtensionAPI & {
 
   // Rewrite tool inputs to honor the virtual cwd.
   pi.on("tool_call", (event, ctx) => {
+    const routesPaths = PATH_TOOLS.has(event.toolName) || event.toolName === "apply_edits" || event.toolName === "subagent";
+    const activeDir = vcwd ?? ctx.cwd;
+    if (routesPaths && !accessibleDirectory(activeDir)) {
+      throw new Error(`Working directory unavailable: ${escapeControl(activeDir)}. Restore it or use change_dir to select another directory.`);
+    }
     if (FFF_TOOLS.has(event.toolName)) {
       const input = event.input as { path?: string; exclude?: string | string[]; cursor?: string };
       if (input.cursor) {
@@ -303,12 +298,6 @@ export default function (pi: ExtensionAPI & {
       const hadAtPrefix = stripAtPrefix && p.startsWith("@");
       const raw = hadAtPrefix ? p.slice(1) : p;
       const clean = raw.startsWith("file://") ? fileURLToPath(raw) : expandTilde(raw);
-      if (!accessibleDirectory(dir)) {
-        const fromDir = isAbsolute(clean) ? relative(dir, realPathWithMissingTail(resolve(clean))) : "";
-        if (fromDir !== ".." && !fromDir.startsWith(`..${sep}`) && !isAbsolute(fromDir)) {
-          throw new Error(`Working directory unavailable: ${escapeControl(dir)}. Restore it or use change_dir to select another directory.`);
-        }
-      }
       if (!isAbsolute(clean)) return resolve(dir, clean);
       return hadAtPrefix && clean === raw ? p : clean;
     };
@@ -328,7 +317,7 @@ export default function (pi: ExtensionAPI & {
       const fff = FFF_TOOLS.has(event.toolName);
       const originalPath = input.path;
       const resolvedPath = DEFAULT_PATH_TOOLS.has(event.toolName) && (input.path === undefined || input.path === "")
-        ? rewrite(".") as string
+        ? dir
         : rewrite(input.path, !fff) as string | undefined;
       const scopedPath = fff && resolvedPath ? relativeToSession(resolvedPath) : undefined;
       const unsafeFffPath = fff && (
@@ -380,7 +369,7 @@ export default function (pi: ExtensionAPI & {
     } else if (event.toolName === "subagent") {
       // pi-subagents resolves all nested cwd values from its top-level cwd.
       const input = event.input as { cwd?: unknown };
-      input.cwd = rewrite(input.cwd === undefined || input.cwd === "" ? "." : input.cwd);
+      input.cwd = input.cwd === undefined || input.cwd === "" ? dir : rewrite(input.cwd);
     }
   });
 
