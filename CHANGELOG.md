@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.3 - 2026-09-19
+
+- Keep native CLI Bash working on released Pi after the original directory is removed, preserving configured shell and command prefix through Pi's native Bash factory.
+- Preserve existing custom Bash tools and user-Bash handler ordering; use the configured shell for the local user-Bash fallback.
+
 ## 0.4.2 - 2026-09-18
 
 - Require an accessible working directory for filesystem, edit, and subagent calls, preventing writes from silently recreating a removed worktree without Git metadata. Absolute paths also require recovery with `change_dir` or restoration of the directory, covering path aliases and host-specific normalization.

@@ -1,4 +1,4 @@
-/** Native Bash integration: PI_PACKAGE_DIR=/path/to/pi/packages/coding-agent npm run test:bash */
+/** Native CLI Bash integration: PI_PACKAGE_DIR=/path/to/pi/packages/coding-agent npm run test:bash */
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import type { BashOperations } from "@earendil-works/pi-coding-agent";
 
 const {
-  createAgentSession, createLocalBashOperations, DefaultResourceLoader, SessionManager, SettingsManager,
+  createAgentSession, createBashToolDefinition, createLocalBashOperations, defineTool, DefaultResourceLoader, SessionManager, SettingsManager,
 } = await import(process.env.PI_PACKAGE_DIR
   ? pathToFileURL(join(process.env.PI_PACKAGE_DIR, "dist/index.js")).href
   : "@earendil-works/pi-coding-agent") as typeof import("@earendil-works/pi-coding-agent");
@@ -18,24 +18,29 @@ const target = join(root, "worktree's directory");
 const alternate = join(root, "alternate");
 const agentDir = join(root, "agent");
 for (const dir of [origin, target, alternate, agentDir]) mkdirSync(dir);
+const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+process.env.PI_CODING_AGENT_DIR = agentDir;
 const shellPath = join(root, "configured-shell");
 writeFileSync(shellPath, '#!/bin/sh\nexport CWD_TEST_SHELL=kept\nexec /bin/bash "$@"\n', { mode: 0o700 });
-const settingsManager = SettingsManager.inMemory({
-  shellPath,
-  shellCommandPrefix: 'export CWD_TEST_PREFIX="$(pwd -P)"',
-});
+writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ shellPath, shellCommandPrefix: "export CWD_TEST_PREFIX=global" }));
+mkdirSync(join(origin, ".pi"));
+const projectSettings = join(origin, ".pi", "settings.json");
+const savePrefix = (label: string) => writeFileSync(projectSettings, JSON.stringify({
+  shellCommandPrefix: `export CWD_TEST_PREFIX="${label}:$(pwd -P)"`,
+}));
+savePrefix("project");
+const settingsManager = SettingsManager.create(origin, agentDir);
 let userOperations: BashOperations | undefined;
-const loader = new DefaultResourceLoader({
-  cwd: origin,
-  agentDir,
-  settingsManager,
+let nativeBashCwd = false;
+const loaderOptions = {
+  cwd: origin, agentDir, settingsManager,
   additionalExtensionPaths: [join(process.cwd(), "index.ts")],
-  noExtensions: true,
-  noSkills: true,
-  noPromptTemplates: true,
-  noThemes: true,
-  noContextFiles: true,
+  noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+};
+const loader = new DefaultResourceLoader({
+  ...loaderOptions,
   extensionFactories: [(pi) => {
+    nativeBashCwd = "registerBashCwdHook" in pi && typeof pi.registerBashCwdHook === "function";
     pi.on("user_bash", () => userOperations ? { operations: userOperations } : undefined);
   }],
 });
@@ -48,29 +53,55 @@ try {
     cwd: origin, agentDir, settingsManager, sessionManager, resourceLoader: loader,
   });
   try {
-    await session.bindExtensions({});
-    const definition = session.getToolDefinition("bash");
+    await session.bindExtensions({ onError: (error) => assert.fail(error.error) });
     const execute = async (toolName: string, input: Record<string, unknown>) => {
+      const originalCommand = input.command;
       const result = await session.extensionRunner.emitToolCall({ type: "tool_call", toolCallId: "test", toolName, input });
       assert.ok(!result?.block, result?.reason);
+      if (toolName === "bash") assert.equal(input.command, originalCommand, "native routing needs no cd prefix");
       const tool = session.agent.state.tools.find((tool) => tool.name === toolName);
       assert.ok(tool, `${toolName} is active`);
       const output = await tool.execute("test", input);
       return output.content.filter((block) => block.type === "text").map((block) => block.text).join("\n").trim();
     };
     const command = 'printf "%s\\n" "$PWD" "$CWD_TEST_SHELL" "$CWD_TEST_PREFIX" "$PI_SESSION_ID"';
-    assert.equal(await execute("bash", { command }), `${origin}\nkept\n${origin}\n${session.sessionId}`);
+    assert.equal(await execute("bash", { command }), `${origin}\nkept\nproject:${origin}\n${session.sessionId}`);
     await execute("change_dir", { path: target });
+    assert.equal(await execute("bash", { command }), `${target}\nkept\nproject:${target}\n${session.sessionId}`);
+
+    // Reload refreshes file settings and restores the branch's selected cwd.
+    savePrefix("reloaded");
+    await session.reload();
+    assert.equal(await execute("bash", { command }), `${target}\nkept\nreloaded:${target}\n${session.sessionId}`);
+    const definition = session.getToolDefinition("bash");
+    const source = session.getAllTools().find((tool) => tool.name === "bash")!.sourceInfo;
+    if (nativeBashCwd) assert.equal(source.source, "builtin");
+    else assert.equal(source.path, join(process.cwd(), "index.ts"));
+    rmSync(join(origin, ".pi"), { recursive: true });
     rmdirSync(origin);
     for (let attempt = 0; attempt < 2; attempt += 1) {
       await execute("change_dir", { path: target });
-      assert.equal(await execute("bash", { command }), `${target}\nkept\n${target}\n${session.sessionId}`);
+      assert.equal(await execute("bash", { command }), `${target}\nkept\nreloaded:${target}\n${session.sessionId}`);
     }
     assert.equal(session.getToolDefinition("bash"), definition);
-    assert.equal(session.getAllTools().find((tool) => tool.name === "bash")?.sourceInfo.source, "builtin");
     assert.equal(sessionManager.getCwd(), origin);
+    assert.equal(existsSync(origin), false);
 
-    // Native user Bash retains the configured shell and any selected custom operations.
+    // Native streaming/cancellation and exit errors still work after origin removal.
+    const bash = session.agent.state.tools.find((tool) => tool.name === "bash")!;
+    const controller = new AbortController();
+    await assert.rejects(() => bash.execute("cancel", { command: "printf ready; sleep 30", timeout: 5 }, controller.signal, (update) => {
+      if (update.content.some((block) => block.type === "text" && block.text.includes("ready"))) controller.abort();
+    }), /ready[\s\S]*Command aborted/);
+    await assert.rejects(() => execute("bash", { command: "printf stdout; printf stderr >&2; exit 7" }), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /stdout/);
+      assert.match(error.message, /stderr/);
+      assert.match(error.message, /Command exited with code 7/);
+      return true;
+    });
+
+    // Stock keeps first-handler ordering; the optional hook also redirects later custom operations.
     const userCommand = 'printf "%s\\n" "$PWD" "$CWD_TEST_SHELL" "$CWD_TEST_PREFIX"';
     const runUserBash = async () => {
       const selected = await session.extensionRunner.emitUserBash({
@@ -81,7 +112,7 @@ try {
         excludeFromContext: true, operations: selected?.operations,
       })).output.trim();
     };
-    assert.equal(await runUserBash(), `${target}\nkept\n${target}`);
+    assert.equal(await runUserBash(), `${target}\nkept\nreloaded:${target}`);
     let customCalls = 0;
     const local = createLocalBashOperations({ shellPath });
     userOperations = {
@@ -91,11 +122,11 @@ try {
         return local.exec(command, cwd, options);
       },
     };
-    assert.equal(await runUserBash(), `${target}\nkept\n${target}`);
-    assert.equal(customCalls, 1);
+    assert.equal(await runUserBash(), `${target}\nkept\nreloaded:${target}`);
+    assert.equal(customCalls, nativeBashCwd ? 1 : 0);
     userOperations = undefined;
 
-    // A missing effective cwd still fails; changing to another existing directory recovers.
+    // A missing effective cwd still fails; changing to an existing directory recovers.
     rmdirSync(target);
     await assert.rejects(() => execute("bash", { command: "pwd -P" }), (error: unknown) => {
       assert.ok(error instanceof Error);
@@ -108,13 +139,66 @@ try {
     );
     assert.equal(existsSync(target), false);
     await execute("change_dir", { path: alternate });
-    assert.equal(await execute("bash", { command }), `${alternate}\nkept\n${alternate}\n${session.sessionId}`);
-    assert.equal(await runUserBash(), `${alternate}\nkept\n${alternate}`);
-    console.log("ok: native Bash survives deleted origin; shell, prefix, environment, user operations, and missing-cwd checks preserved");
+    assert.equal(await execute("bash", { command }), `${alternate}\nkept\nreloaded:${alternate}\n${session.sessionId}`);
+    assert.equal(await runUserBash(), `${alternate}\nkept\nreloaded:${alternate}`);
+
+    console.log("ok: native CLI Bash preserves file settings/reload, deleted-origin routing, streaming/abort, user Bash and cwd recovery");
   } finally {
     await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
     session.dispose();
   }
+
+  // Already configured extension and SDK customTools executors must never be replaced.
+  for (const owner of ["extension", "sdk"] as const) {
+    let calls = 0;
+    const custom = defineTool(createBashToolDefinition(alternate, {
+      operations: { async exec(command, _cwd, { onData }) { calls++; onData(Buffer.from(command)); return { exitCode: 0 }; } },
+    }));
+    const customUser: BashOperations = {
+      async exec(_command, cwd, { onData }) {
+        assert.equal(cwd, nativeBashCwd ? root : alternate);
+        onData(Buffer.from("custom-user"));
+        return { exitCode: 0 };
+      },
+    };
+    const customLoader = new DefaultResourceLoader({
+      ...loaderOptions, cwd: alternate,
+      extensionFactories: [(pi) => {
+        if (owner === "extension") pi.registerTool(custom);
+        pi.on("user_bash", () => ({ operations: customUser }));
+      }],
+      // Put the custom executor first, before CWD's first-handler-wins user fallback.
+      extensionsOverride: (loaded) => ({ ...loaded, extensions: [...loaded.extensions].reverse() }),
+    });
+    await customLoader.reload();
+    assert.deepEqual(customLoader.getExtensions().errors, []);
+    const { session } = await createAgentSession({
+      cwd: alternate, agentDir, settingsManager, resourceLoader: customLoader,
+      sessionManager: SessionManager.inMemory(alternate),
+      customTools: owner === "sdk" ? [custom] : undefined,
+    });
+    try {
+      await session.bindExtensions({ onError: (error) => assert.fail(error.error) });
+      assert.equal(session.getToolDefinition("bash"), custom);
+      await session.agent.state.tools.find((tool) => tool.name === "change_dir")!.execute("change", { path: root });
+      const input = { command: "custom-owned" };
+      await session.extensionRunner.emitToolCall({ type: "tool_call", toolCallId: "custom", toolName: "bash", input });
+      assert.equal(input.command, `cd '${root}' || exit 1\ncustom-owned`);
+      const result = await session.agent.state.tools.find((tool) => tool.name === "bash")!.execute("custom", input);
+      assert.equal(result.content[0]?.type === "text" && result.content[0].text, input.command);
+      assert.equal(calls, 1);
+      const selected = await session.extensionRunner.emitUserBash({ type: "user_bash", command: "custom-user", cwd: alternate, excludeFromContext: true });
+      assert.equal(selected?.operations, customUser);
+      assert.equal((await session.executeBash("custom-user", undefined, { operations: selected?.operations, excludeFromContext: true })).output, "custom-user");
+      assert.equal(session.getToolDefinition("bash"), custom);
+      console.log(`ok: ${owner}-owned Bash and earlier user executor retained`);
+    } finally {
+      await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+      session.dispose();
+    }
+  }
 } finally {
+  if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
   rmSync(root, { recursive: true, force: true });
 }

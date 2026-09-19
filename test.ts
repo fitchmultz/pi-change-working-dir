@@ -13,6 +13,8 @@ const worktree = realpathSync(mkdtempSync(join(tmpdir(), "cwd-worktree-")));
 const alternateWorktree = realpathSync(mkdtempSync(join(tmpdir(), "cwd-alternate-")));
 const inaccessible = realpathSync(mkdtempSync(join(tmpdir(), "cwd-inaccessible-")));
 const agentDir = realpathSync(mkdtempSync(join(tmpdir(), "cwd-agent-")));
+const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+process.env.PI_CODING_AGENT_DIR = agentDir;
 const worktreeLink = join(sessionCwd, "worktree-link");
 symlinkSync(worktree, worktreeLink, process.platform === "win32" ? "junction" : "dir");
 
@@ -38,6 +40,8 @@ const loadExtension = async (resourceLoader = createLoader()) => {
   loaded.runtime.appendEntry = (customType: string, data: unknown) =>
     entries.push({ type: "custom", customType, data });
   loaded.runtime.sendMessage = (message) => sentMessages.push(message);
+  // Exercise custom-tool input routing here; test-bash.ts covers native tool ownership.
+  loaded.runtime.getAllTools = () => [];
   assert.deepEqual(loaded.errors, []);
   return loaded.extensions[0]!;
 };
@@ -48,6 +52,7 @@ const ctx: any = {
   cwd: sessionCwd,
   hasUI: true,
   mode: "tui",
+  isProjectTrusted: () => true,
   ui: {
     setStatus: (key: string, value: string | undefined) => statuses.set(key, value),
     notify: (message: string) => notifications.push(message),
@@ -601,4 +606,6 @@ rmSync(inaccessible, { recursive: true, force: true });
 rmSync(restoredThenChanged, { recursive: true, force: true });
 rmSync(unavailableThenRestored, { recursive: true, force: true });
 rmSync(agentDir, { recursive: true, force: true });
+if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 console.log("ok");

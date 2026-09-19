@@ -6,7 +6,7 @@ Pi's session cwd stays tied to the directory where the session started. This ext
 
 | Surface | Behavior |
 |---|---|
-| `bash` | Uses Pi's native cwd hook when available, before directory checks; also prefixes `cd <dir> \|\| exit 1` for older hosts and custom tools |
+| `bash` | Routes native Bash before directory checks; existing custom Bash tools keep their executor and receive a `cd <dir> \|\| exit 1` prefix |
 | `read` / `write` / `edit` | Relative paths resolve against the virtual cwd |
 | `ls` / `grep` / `find` | Relative + defaulted paths resolve against the virtual cwd |
 | `ffgrep` / `fffind` | Path constraints follow the virtual cwd; see the search limitations below |
@@ -21,7 +21,7 @@ The directory is validated, canonicalized, and persisted on each session branch,
 
 ## Requirements
 
-Pi 0.84.0 or later. Running Bash after the original session directory is removed requires Pi's optional `registerBashCwdHook` API ([native change](https://github.com/fitchmultz/pi/pull/14)). The extension detects that method; hosts without it retain the older routing and require the original directory to remain accessible.
+Pi 0.84.0 or later. Native CLI Bash continues working after the original session directory is removed, provided the selected directory still exists. Shell settings are captured from the original session's user/project configuration and refreshed on `/reload`.
 
 ## Usage
 
@@ -48,7 +48,8 @@ Restart Pi after updating extension code; `/reload` reinitializes the already lo
 - Only the default `ffgrep` and `fffind` names receive FFF-specific scoping and result rebasing. `PI_FFF_MODE=override` and `multi_grep` are not supported.
 - Explicit parallel wrappers can still race `change_dir`; Pi's native sibling calls are serialized because the tool declares sequential execution.
 - Pi runs `tool_call` handlers in extension load order. Load this extension before path-policy extensions so they inspect rewritten paths. This extension is not a sandbox.
-- With the native cwd hook, `!cmd` retains Pi's configured shell and any executor selected by another `user_bash` handler. On older hosts, this extension supplies the `!cmd` executor while a virtual cwd is active: `user_bash` is first-result-wins, so order it deliberately relative to sandbox or remote-shell extensions. That legacy executor uses Pi's default detected Bash, not the configured `shellPath`.
+- On released Pi, `user_bash` is first-handler-wins. While a virtual cwd is active, this extension supplies a local executor using the configured `shellPath`. Put sandbox or remote-shell handlers before it to retain their executors; their cwd handling remains their responsibility. Existing custom Bash tools are also left intact and may still require the original directory. When Pi provides its optional native cwd hook, it is used instead.
+- The native Bash fallback reads CLI file settings, respecting project trust. SDK-only shell settings and base-executor overrides are outside this fallback's scope.
 - `/cwd` feedback uses Pi UI notifications; in print/JSON mode use the model-callable `change_dir` tool instead.
 - An unavailable saved directory falls back to the session cwd without deleting the saved branch state; a later reload can restore it after the path returns.
 - If the effective working directory is deleted or loses access, the listed file/search tools, `apply_edits`, and `subagent` are blocked until it is restored or an accessible directory is selected with `change_dir` or `/cwd`. This applies to absolute paths too: alternate spellings and host-specific normalization must not recreate a removed worktree.
@@ -63,8 +64,9 @@ npm install
 npm run check
 ```
 
-Run the deleted-original-directory regression against a Pi build that exposes the native cwd hook:
+Run the native Bash regression against the installed dependency, or select a published Pi package or local build:
 
 ```bash
+npm run test:bash
 PI_PACKAGE_DIR=/absolute/path/to/pi/packages/coding-agent npm run test:bash
 ```
