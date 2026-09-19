@@ -4,7 +4,7 @@
  *
  * Pi keeps the session cwd fixed. This extension tracks a "virtual cwd" and
  * routes subsequent tools there:
- *   - bash: uses the native cwd hook when available; also prefixes `cd` for custom/older tools
+ *   - bash: routes native execution before cwd checks; prefixes `cd` for custom tools
  *   - built-in and FFF file/search tools: resolve relative paths against the dir
  *   - apply_edits/subagent: rewrites their cwd-bearing inputs
  *   - `!` user bash: runs in the dir
@@ -13,7 +13,9 @@
  * in the footer. `change_dir` tool for the agent, `/cwd [path]` for the user.
  */
 import {
+  createBashToolDefinition,
   createLocalBashOperations,
+  SettingsManager,
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
@@ -167,7 +169,8 @@ export default function (pi: ExtensionAPI & {
     ["ffgrep", new Map()],
     ["fffind", new Map()],
   ]);
-  const localBash = createLocalBashOperations();
+  let localBash = createLocalBashOperations();
+  let routedBashSource: string | undefined;
 
   const updateStatus = (ctx: ExtensionContext) => {
     if (ctx.hasUI) ctx.ui.setStatus("cwd", vcwd ? `cwd: ${tildify(vcwd)}` : undefined);
@@ -236,7 +239,24 @@ export default function (pi: ExtensionAPI & {
   };
 
   // Restore the active branch's persisted dir on startup/resume/fork and tree navigation.
-  pi.on("session_start", (_event, ctx) => restoreDir(ctx));
+  pi.on("session_start", (_event, ctx) => {
+    if (!nativeBashCwd) {
+      // Capture the CLI's original project settings before that directory can disappear.
+      // A fresh extension instance on reload picks up refreshed settings.
+      const settings = SettingsManager.create(ctx.cwd, undefined, { projectTrusted: ctx.isProjectTrusted() });
+      const shellPath = settings.getShellPath();
+      localBash = createLocalBashOperations({ shellPath });
+      if (pi.getAllTools().find((tool) => tool.name === "bash")?.sourceInfo.source === "builtin") {
+        pi.registerTool(createBashToolDefinition(ctx.cwd, {
+          shellPath,
+          commandPrefix: settings.getShellCommandPrefix(),
+          spawnHook: (context) => ({ ...context, cwd: vcwd ?? context.cwd }),
+        }));
+        routedBashSource = pi.getAllTools().find((tool) => tool.name === "bash")?.sourceInfo.path;
+      }
+    }
+    restoreDir(ctx);
+  });
   pi.on("session_tree", (_event, ctx) => restoreDir(ctx));
   pi.on("session_shutdown", (_event, ctx) => {
     if (ctx.hasUI) ctx.ui.setStatus("cwd", undefined);
@@ -308,6 +328,9 @@ export default function (pi: ExtensionAPI & {
       return scoped.split(sep).join("/");
     };
     if (event.toolName === "bash") {
+      const source = pi.getAllTools().find((tool) => tool.name === "bash")?.sourceInfo;
+      if ((routedBashSource && source?.path === routedBashSource)
+        || (nativeBashCwd && source?.source === "builtin")) return;
       const input = event.input as { command?: string };
       if (typeof input.command === "string") {
         input.command = `cd ${shellQuote(dir)} || exit 1\n${input.command}`;
@@ -421,7 +444,8 @@ export default function (pi: ExtensionAPI & {
     };
   });
 
-  // Older hosts need an executor override; the native hook preserves the selected executor.
+  // Stock user_bash is first-handler-wins; keep its ordering and use the configured shell.
+  // The native hook, when present, also redirects executors selected by other extensions.
   pi.on("user_bash", () => {
     if (nativeBashCwd || !vcwd) return;
     const dir = vcwd;
