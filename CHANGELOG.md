@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.3 - 2026-09-19
 
 - Keep native CLI Bash working on released Pi after the original directory is removed, preserving configured shell and command prefix through Pi's native Bash factory.
 - Preserve existing custom Bash tools and user-Bash handler ordering; use the configured shell for the local user-Bash fallback.
