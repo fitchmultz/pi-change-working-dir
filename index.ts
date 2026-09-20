@@ -264,6 +264,26 @@ export default function (pi: ExtensionAPI & {
     if (holder.current === readState) holder.current = () => ({});
   });
 
+  // Additive fork event, locally typed so released Pi remains supported.
+  (pi.on as unknown as (event: "session_checkpoint", handler: (
+    event: unknown, ctx: ExtensionContext,
+  ) => { sleepReady: boolean; reason?: string }) => void)("session_checkpoint", (_event, ctx) => {
+    // Native dispatch owns cwd changes. Spawn routing is reconstructed at session_start,
+    // but FFF cursor routes have no hydrator: do not certify a live route or disable FFF.
+    if ([...fffCursors.values()].some((cursors) => cursors.size > 0)) {
+      return { sleepReady: false, reason: "FFF cursor routes are memory-only" };
+    }
+    const entry = ctx.sessionManager.getBranch().slice().reverse().find((entry) => entry.type === "custom" && entry.customType === ENTRY_TYPE);
+    const data = entry?.type === "custom" ? entry.data as { dir?: unknown } | null : undefined;
+    const saved = data?.dir;
+    const target = typeof saved === "string" && isAbsolute(saved) ? accessibleDirectory(saved) : undefined;
+    const restored = target && escapeControl(target) === target && !sameDirectory(target, ctx.cwd) ? target : undefined;
+    if (restored !== vcwd) {
+      return { sleepReady: false, reason: "Working directory differs from the selected branch restore" };
+    }
+    return { sleepReady: true };
+  });
+
   pi.registerTool({
     name: "change_dir",
     label: "Change Directory",
