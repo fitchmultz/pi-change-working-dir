@@ -81,6 +81,7 @@ let event: any = { toolName: "bash", input: { command: "ls" } };
 if (process.platform !== "win32") assert.equal(await pwd(sessionCwd), sessionCwd);
 await emit(ext, "tool_call", event);
 assert.equal(event.input.command, "ls");
+assert.deepEqual(await emit(ext, "session_checkpoint", {}), { sleepReady: true });
 const rootCursorInput = { path: "src/", exclude: "test/" };
 await emit(ext, "tool_result", {
   toolName: "ffgrep",
@@ -92,6 +93,11 @@ event = { toolName: "ffgrep", input: { pattern: "x", cursor: "fff_c0" } };
 await emit(ext, "tool_call", event);
 assert.equal(event.input.path, rootCursorInput.path);
 assert.equal(event.input.exclude, rootCursorInput.exclude);
+assert.deepEqual(await emit(ext, "session_checkpoint", {}), {
+  sleepReady: false, reason: "FFF cursor routes are memory-only",
+});
+// Refusing sleep does not consume the cursor or disable FFF.
+assert.equal((await emit(ext, "tool_call", event))?.block, undefined);
 
 // change_dir rejects empty, missing, and inaccessible directories.
 await assert.rejects(() => changeDir.execute("t0", { path: "" }, undefined, undefined, ctx), /Path is required/);
@@ -449,6 +455,12 @@ if (process.platform !== "win32") {
 const ext2 = await loadExtension();
 const changeDir2 = ext2.tools.get("change_dir")!.definition;
 await emit(ext2, "session_start", {});
+assert.deepEqual(await emit(ext2, "session_checkpoint", {}), { sleepReady: true });
+branchEntries = [];
+assert.deepEqual(await emit(ext2, "session_checkpoint", {}), {
+  sleepReady: false, reason: "Working directory differs from the selected branch restore",
+});
+branchEntries = entries;
 event = { toolName: "bash", input: { command: "pwd" } };
 await emit(ext2, "tool_call", event);
 assert.equal(event.input.command, `cd '${worktree}' || exit 1\npwd`);

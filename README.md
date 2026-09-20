@@ -57,6 +57,10 @@ Restart Pi after updating extension code; `/reload` reinitializes the already lo
 - Project trust, `.pi/extensions`, AGENTS.md, skill discovery, and other project-scoped extension state remain bound to the original session cwd.
 - Windows is not currently tested.
 
+## Native checkpoints
+
+On Pi forks with `session_checkpoint`, the extension qualifies its existing branch-backed cwd only when cold restoration would select the same directory. Native dispatch already owns pending commands/tools/Bash; shutdown still detaches the spawn holder. No second cwd store is created. Retained FFF cursor routes block sleep because their memory is not restored; an unused FFF integration does not block or get disabled. Older Pi hosts ignore the additive hook.
+
 ## Test
 
 ```bash
