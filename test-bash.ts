@@ -48,6 +48,10 @@ const loader = new DefaultResourceLoader({
 try {
   await loader.reload();
   assert.deepEqual(loader.getExtensions().errors, []);
+  if (process.env.PI_COMPAT_HOST === "fork") {
+    assert.equal(nativeBashCwd, true, "fork qualification requires registerBashCwdHook");
+  }
+  console.log(`Bash cwd routing: ${nativeBashCwd ? "native hook" : "official fallback"}`);
   const sessionManager = SessionManager.inMemory(origin);
   const { session } = await createAgentSession({
     cwd: origin, agentDir, settingsManager, sessionManager, resourceLoader: loader,
