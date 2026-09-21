@@ -28,6 +28,7 @@
     "test:bash": "node --experimental-strip-types test-bash.ts",
     "typecheck": "tsc",
     "check": "npm run typecheck && npm test && npm run pack:check",
+    "check:compat": "npm run check && npm run test:bash",
     "pack:check": "npm pack --dry-run",
     "prepublishOnly": "npm run check"
   },
@@ -52,7 +53,7 @@
     }
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.84.0",
+    "@earendil-works/pi-coding-agent": "0.86.1",
     "@types/node": "24.12.4",
     "typebox": "1.3.7",
     "typescript": "5.9.3"

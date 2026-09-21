@@ -1,4 +1,4 @@
-name: Check
+name: macOS Bash contract
 
 on:
   pull_request:
@@ -13,14 +13,20 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        node: [22, 24]
+        # Shared compatibility owns the Linux official/fork matrix.
+        os: [macos-latest]
+        node: ['22.19.0']
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: npm run check
-      - run: npm run test:bash
+      - name: macOS selected local graph and Bash behavior
+        env:
+          PI_OFFLINE: '1'
+          PI_COMPAT_HOST: official
+        run: npm run check:compat
