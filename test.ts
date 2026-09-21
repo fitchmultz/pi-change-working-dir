@@ -420,11 +420,8 @@ assert.equal(result.systemPrompt, `Current working directory: ${worktree}\nprose
 result = await emit(ext, "before_agent_start", { systemPrompt: "base" });
 assert.match(result.systemPrompt, new RegExp(worktree));
 
-// User bash follows the override.
-const userBash = await emit(ext, "user_bash", { command: "pwd", cwd: sessionCwd });
-let userBashOutput = "";
-await userBash.operations.exec("pwd", sessionCwd, { onData: (chunk: Buffer) => (userBashOutput += chunk) });
-assert.equal(userBashOutput.trim(), worktree);
+// test-bash.ts exercises user Bash through real sessions: the fork's native cwd hook
+// intentionally needs no user_bash operations override, unlike the official fallback.
 if (process.platform !== "win32") {
   assert.equal(await pwd(sessionCwd), worktree);
   assert.equal(await pwd(sessionCwd, true), worktree);
