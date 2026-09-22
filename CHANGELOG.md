@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1 - 2026-09-22
+
+- Correct the native settlement compatibility fixture to inspect the low-level agent signal. The 0.5.0 runtime behavior is unchanged.
+
 ## 0.5.0 - 2026-09-22
 
 - Expose one session-scoped execution-directory interface for cooperating extensions, including explicit child-directory initialization.
