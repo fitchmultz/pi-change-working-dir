@@ -301,7 +301,12 @@ export default function (pi: ExtensionAPI & {
         // File URLs bypass host Unicode-space rewriting as well as lexical traversal.
         const input = delegatedPath ? { ...params, path: delegatedPath } : params;
         const executionContext = Object.create(ctx, { cwd: { value: cwd, enumerable: true } }) as ExtensionContext;
-        const result = await delegate.execute(id, input, signal, onUpdate, executionContext);
+        const result = await delegate.execute(id, input, signal, onUpdate, executionContext).catch((error: unknown) => {
+          if (error instanceof Error && delegatedPath && path) {
+            error.message = error.message.replaceAll(delegatedPath, target ?? path);
+          }
+          throw error;
+        });
         // Only generated summaries/hints contain delegated URLs; never rewrite file contents.
         if (delegatedPath && target && (mutation || result.details?.truncation?.firstLineExceedsLimit)) {
           const displayPath = mutation ? target : `'${target.replaceAll("'", "'\\''")}'`;

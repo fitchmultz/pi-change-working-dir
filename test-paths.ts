@@ -133,6 +133,16 @@ try {
   const literalURL = pathToFileURL(join(root, "url-content.txt")).href;
   writeFileSync(join(root, "url-content.txt"), literalURL);
   assert.equal(text(await execute("read", { path: "url-content.txt" })), literalURL);
+  const errorPath = "errors space\u00a0.txt";
+  writeFileSync(join(root, errorPath), "repeat\nrepeat\n");
+  for (const [path, oldText] of [[errorPath, "no match"], [errorPath, "repeat"], ["missing space\u00a0.txt", "old"]]) {
+    await assert.rejects(() => execute("edit", { path, edits: [{ oldText, newText: "new" }] }), error => {
+      assert.ok(error instanceof Error);
+      assert.doesNotMatch(error.message, /file:\/\//);
+      assert.ok(error.message.includes(join(root, path!)), error.message);
+      return true;
+    });
+  }
 
   // Native factories retain FIFO acquisition and their publisher under held locks.
   const ctx = session.extensionRunner!.createContext();
