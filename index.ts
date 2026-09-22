@@ -27,13 +27,14 @@ const RESOLVE_CWD = "pi-change-working-dir:resolve-execution-cwd";
 const SET_CWD = "pi-change-working-dir:set-execution-cwd";
 const DEFAULT_PATH_TOOLS = new Set(["ls", "grep", "find"]);
 const PATH_TOOLS = new Set(["read", "write", "edit", ...DEFAULT_PATH_TOOLS]);
+const UNICODE_SPACES = /[\u00a0\u2000-\u200a\u202f\u205f\u3000]/g;
 
 type DirectoryRequest = {
   sessionManager: ExtensionContext["sessionManager"];
   path?: unknown;
   result?: { cwd: string; error?: string };
 };
-type Invocation = { cwd: string };
+type Invocation = { cwd: string; readFallback?: { bound: string; spaced: string } };
 type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2];
 
 const expandTilde = (path: string): string =>
@@ -85,10 +86,10 @@ const bindPath = (path: unknown, cwd: string): unknown =>
 
 // The hosts' read-path helper is private. Preserve its ordered full-path variants,
 // validating each with native traversal before canonicalization.
-async function readTarget(path: string): Promise<string> {
-  const nfd = path.normalize("NFD");
-  const variants = new Set([path, path.replace(/ (AM|PM)\./gi, "\u202f$1."),
-    nfd, path.replace(/'/g, "\u2019"), nfd.replace(/'/g, "\u2019")]);
+async function readTarget(path: string, spaced = path.replace(UNICODE_SPACES, " ")): Promise<string> {
+  const nfd = spaced.normalize("NFD");
+  const variants = new Set([path, spaced, spaced.replace(/ (AM|PM)\./gi, "\u202f$1."),
+    nfd, spaced.replace(/'/g, "\u2019"), nfd.replace(/'/g, "\u2019")]);
   let failure: unknown;
   for (const candidate of variants) {
     try { await stat(candidate); } catch (error) { failure ??= error; continue; }
@@ -227,11 +228,15 @@ export default function (pi: ExtensionAPI & {
 
   const bindInvocation = (name: string, input: Record<string, unknown>, cwd: string) => {
     assertAvailable(cwd);
+    const rawPath = input.path;
     if (PATH_TOOLS.has(name)) {
       input.path = DEFAULT_PATH_TOOLS.has(name) && (input.path === undefined || input.path === "")
         ? cwd : bindPath(input.path, cwd);
     }
-    invocations.set(input, { cwd });
+    // Normalize the requested spelling, never Unicode spaces in a captured cwd.
+    const readFallback = name === "read" && typeof rawPath === "string" && typeof input.path === "string"
+      ? { bound: input.path, spaced: bindPath(rawPath.replace(UNICODE_SPACES, " "), cwd) as string } : undefined;
+    invocations.set(input, { cwd, readFallback });
   };
 
   const wrap = (definition: ToolDefinition<any, any, any>): ToolDefinition<any, any, any> => ({
@@ -241,7 +246,7 @@ export default function (pi: ExtensionAPI & {
       const params = value as Record<string, unknown>;
       initialize(ctx);
       if (!invocations.has(params)) bindInvocation(definition.name, params, current(ctx));
-      const { cwd } = invocations.get(params)!;
+      const { cwd, readFallback } = invocations.get(params)!;
       assertAvailable(cwd);
       const path = PATH_TOOLS.has(definition.name) && typeof params.path === "string" ? params.path : undefined;
       try {
@@ -290,7 +295,7 @@ export default function (pi: ExtensionAPI & {
             } });
         } else if (path) {
           if (definition.name === "read") {
-            showTarget(await readTarget(path));
+            showTarget(await readTarget(path, readFallback?.bound === path ? readFallback.spaced : undefined));
           } else {
             await stat(path);
             showTarget(await realpath(path));
@@ -335,6 +340,13 @@ export default function (pi: ExtensionAPI & {
         return definition.renderCall!(bound, theme, {
           ...ctx,
           cwd: ctx.state.workingDirectory ?? ctx.cwd,
+          invalidate() {
+            const preview = definition.name === "edit" && ctx.state.callComponent?.preview;
+            if (typeof preview?.error === "string" && ctx.state.workingTarget) {
+              preview.error = preview.error.replaceAll(pathToFileURL(ctx.state.workingTarget).href, ctx.state.workingTarget);
+            }
+            ctx.invalidate();
+          },
           // Argument completion precedes native preflight; don't preview the wrong file.
           argsComplete: ctx.argsComplete && Boolean(ctx.state.workingDirectory),
         });

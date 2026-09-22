@@ -86,6 +86,26 @@ try {
   legacy.updateResult({ ...result, details: { ...result.details as object, workingTarget: undefined, workingPath: physicalFile }, isError: false });
   assert.match(render(legacy), /B_ONLY_CONTEXT/);
   assert.doesNotMatch(render(legacy), /A_ONLY_CONTEXT/);
+  writeFileSync(physicalFile, "repeat\nrepeat\n");
+  for (const oldText of ["missing", "repeat"]) {
+    const failedArgs = { path: requested, edits: [{ oldText, newText: "new" }] };
+    const failed = new ToolExecutionComponent("edit", `failed-${oldText}`, failedArgs, {}, definition, ui, a);
+    failed.setArgsComplete();
+    const input = structuredClone(failedArgs);
+    await session.extensionRunner!.emitToolCall({ type: "tool_call", toolName: "edit", toolCallId: `failed-${oldText}`, input });
+    failed.markExecutionStarted();
+    await assert.rejects(() => definition.execute(`failed-${oldText}`, input, undefined, undefined, ctx), error => {
+      assert.ok(error instanceof Error);
+      failed.updateResult({ content: [{ type: "text", text: error.message }], details: undefined, isError: true });
+      return true;
+    });
+    for (let attempt = 0; attempt < 200 && !failed.rendererState.callComponent?.preview?.error; attempt++) await delay(5);
+    assert.ok(failed.rendererState.callComponent?.preview?.error, "native failed preview completed");
+    const output = render(failed);
+    assert.doesNotMatch(output, /file:\/\//);
+    assert.equal((output.match(/Could not find the exact text|Found 2 occurrences/g) ?? []).length, 1,
+      "native preview/result error deduplication remains intact");
+  }
   const writeArgs = { path: "preview-only/new.txt", content: "NEW" };
   const writeComponent = new ToolExecutionComponent("write", "write-preview", writeArgs, {}, session.getToolDefinition("write")!, ui, a);
   writeComponent.setArgsComplete();

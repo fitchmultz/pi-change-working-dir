@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
-const { createAgentSession, createEditToolDefinition, createWriteToolDefinition, DefaultResourceLoader, SessionManager, SettingsManager, withFileMutationQueue } = await import(process.env.PI_PACKAGE_DIR
+const { createAgentSession, createEditToolDefinition, createReadToolDefinition, createWriteToolDefinition, DefaultResourceLoader, SessionManager, SettingsManager, withFileMutationQueue } = await import(process.env.PI_PACKAGE_DIR
   ? pathToFileURL(join(process.env.PI_PACKAGE_DIR, "dist/index.js")).href
   : "@earendil-works/pi-coding-agent") as typeof import("@earendil-works/pi-coding-agent");
 
@@ -119,6 +119,18 @@ try {
       assert.equal(readFileSync(join(root, stored!, "note.txt"), "utf8"), "PARENT_FALLBACK");
     }
   }
+  writeFileSync(join(root, "fallback space.txt"), "ASCII_FALLBACK");
+  for (const space of ["\u00a0", "\u2009", "\u202f", "\u3000"]) {
+    assert.equal(text(await createReadToolDefinition(root).execute("native-space", { path: `fallback${space}space.txt` },
+      undefined, undefined, session.extensionRunner!.createContext())), "ASCII_FALLBACK");
+    assert.equal(text(await execute("read", { path: `fallback${space}space.txt` })), "ASCII_FALLBACK");
+    if (process.platform !== "win32") await assert.rejects(() => execute("read", { path: `absent/../fallback${space}space.txt` }));
+  }
+  await assert.rejects(() => execute("edit", { path: "fallback\u00a0space.txt",
+    edits: [{ oldText: "ASCII_FALLBACK", newText: "BAD" }] }));
+  await execute("write", { path: "fallback\u00a0space.txt", content: "EXACT_WRITE" });
+  assert.equal(readFileSync(join(root, "fallback\u00a0space.txt"), "utf8"), "EXACT_WRITE");
+  assert.equal(readFileSync(join(root, "fallback space.txt"), "utf8"), "ASCII_FALLBACK");
   const hugeName = "huge '$ literal.txt";
   writeFileSync(join(root, hugeName), "X".repeat(60_000));
   const hint = text(await execute("read", { path: hugeName }));
@@ -222,6 +234,15 @@ try {
   const unicodeDir = "search\u00a0directory";
   mkdirSync(join(root, unicodeDir)); mkdirSync(join(root, "search directory"));
   writeFileSync(join(root, unicodeDir, "selected.txt"), "SEARCH_MARKER\n");
+  writeFileSync(join(root, unicodeDir, "a b.txt"), "SCOPED_FALLBACK");
+  writeFileSync(join(root, "search directory", "a b.txt"), "WRONG_DIRECTORY");
+  const unicodeCwd = join(root, unicodeDir);
+  const nativeContext = Object.create(ctx, { cwd: { value: unicodeCwd } });
+  assert.equal(text(await createReadToolDefinition(unicodeCwd).execute("scoped-fallback", { path: "a\u00a0b.txt" },
+    undefined, undefined, nativeContext)), "SCOPED_FALLBACK");
+  await execute("change_dir", { path: unicodeCwd });
+  assert.equal(text(await execute("read", { path: "a\u00a0b.txt" })), "SCOPED_FALLBACK");
+  await execute("change_dir", { path: root });
   for (const [name, extra] of [
     ["ls", {}], ["find", { pattern: "selected.txt" }], ["grep", { pattern: "SEARCH_MARKER" }],
   ] as const) {
