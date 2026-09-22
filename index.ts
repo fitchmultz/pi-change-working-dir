@@ -14,9 +14,10 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
+import { lstat, mkdir, readlink, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Type } from "typebox";
 import { registerCwdContext } from "./cwd-context.ts";
 
@@ -50,8 +51,8 @@ const escapeControl = (path: string): string =>
 
 const accessibleDirectory = (path: string): string | undefined => {
   try {
-    const target = realpathSync(path);
-    if (!statSync(target).isDirectory()) return;
+    if (!statSync(path).isDirectory()) return;
+    const target = realpathSync.native(path);
     accessSync(target, constants.X_OK);
     return target;
   } catch {
@@ -68,16 +69,46 @@ const assertAvailable = (cwd: string): void => {
   }
 };
 
-const bindPath = (path: unknown, cwd: string): unknown => {
-  if (typeof path !== "string" || !path) return path;
-  const raw = path.startsWith("@") ? path.slice(1) : path;
-  return resolve(cwd, raw.startsWith("file://") ? fileURLToPath(raw) : expandTilde(raw));
+const operationPath = (path: string, cwd: string): string => {
+  const expanded = path.startsWith("file://") ? fileURLToPath(path) : expandTilde(path);
+  // DOS paths normalize before lookup; POSIX traversal must reach the filesystem intact.
+  if (sep === "\\" && !/^\\\\[?.]\\/.test(expanded)) {
+    const target = resolve(cwd, expanded);
+    return /[\\/]$/.test(expanded) && !target.endsWith(sep) ? target + sep : target;
+  }
+  return isAbsolute(expanded) ? expanded : `${cwd}${sep}${expanded}`;
 };
 
-const nativePath = (path: string, cwd: string): string => {
-  const scoped = relative(cwd, path);
-  return isAbsolute(scoped) ? scoped : scoped ? `.${sep}${scoped}` : ".";
-};
+const bindPath = (path: unknown, cwd: string): unknown =>
+  typeof path === "string" && path ? operationPath(path.startsWith("@") ? path.slice(1) : path, cwd) : path;
+
+// Official Pi has no target resolver export. Keep its default publisher, but validate
+// each native parent/link before handing a canonical file URL to either host.
+async function writeTarget(path: string): Promise<string> {
+  const links = new Set<string>();
+  for (;;) {
+    if (path.endsWith(sep) || path.endsWith("/")) {
+      await stat(path);
+      return realpath(path);
+    }
+    const parentPath = dirname(path);
+    if (!(await stat(parentPath)).isDirectory()) {
+      throw Object.assign(new Error(`Not a directory: ${parentPath}`), { code: "ENOTDIR" });
+    }
+    const parent = await realpath(parentPath);
+    const target = join(parent, basename(path));
+    const info = await lstat(target).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+      return undefined;
+    });
+    if (!info) return target;
+    if (!info.isSymbolicLink()) return realpath(target);
+    if (links.has(target)) throw Object.assign(new Error(`Symlink cycle: ${target}`), { code: "ELOOP" });
+    links.add(target);
+    const link = await readlink(target);
+    path = isAbsolute(link) ? link : `${parent}${sep}${link}`;
+  }
+}
 
 export default function (pi: ExtensionAPI & {
   registerBashCwdHook?: (hook: (cwd: string) => string) => void;
@@ -132,7 +163,7 @@ export default function (pi: ExtensionAPI & {
   const change = (path: unknown, ctx: ExtensionContext): string => {
     initialize(ctx);
     if (typeof path !== "string" || !path) throw new Error("Path is required");
-    const requested = resolve(current(ctx), expandTilde(path));
+    const requested = operationPath(path, current(ctx));
     const target = accessibleDirectory(requested);
     if (!target) throw new Error(`Not an accessible directory: ${escapeControl(requested)}`);
     if (escapeControl(target) !== target) {
@@ -173,20 +204,35 @@ export default function (pi: ExtensionAPI & {
       const { cwd } = invocations.get(params)!;
       assertAvailable(cwd);
       const path = PATH_TOOLS.has(definition.name) && typeof params.path === "string" ? params.path : undefined;
-      const rendering = renderCalls.get(id);
-      if (rendering) {
-        rendering.state.workingDirectory = cwd;
-        rendering.state.workingPath = path;
-        rendering.invalidate();
-      }
-      // Keep the captured root out of the native tool's input-path normalization.
-      const input = path ? { ...params, path: nativePath(path, cwd) } : params;
-      const executionContext = Object.create(ctx, { cwd: { value: cwd, enumerable: true } }) as ExtensionContext;
       try {
+        signal?.throwIfAborted();
+        let target: string | undefined;
+        if (path) {
+          if (definition.name === "write") {
+            await mkdir(dirname(path), { recursive: true });
+            signal?.throwIfAborted();
+            target = await writeTarget(path);
+          } else {
+            await stat(path);
+            signal?.throwIfAborted();
+            target = await realpath(path);
+          }
+        }
+        signal?.throwIfAborted();
+        const rendering = renderCalls.get(id);
+        if (rendering) {
+          rendering.state.workingDirectory = cwd;
+          rendering.state.workingPath = path;
+          rendering.state.workingTarget = target;
+          rendering.invalidate();
+        }
+        // File URLs bypass host Unicode-space rewriting as well as lexical traversal.
+        const input = target ? { ...params, path: pathToFileURL(target).href } : params;
+        const executionContext = Object.create(ctx, { cwd: { value: cwd, enumerable: true } }) as ExtensionContext;
         const result = await definition.execute(id, input, signal, onUpdate, executionContext);
         return {
           ...result,
-          details: { ...result.details, workingDirectory: cwd, ...(path ? { workingPath: path } : {}) },
+          details: { ...result.details, workingDirectory: cwd, ...(path ? { workingPath: path, workingTarget: target } : {}) },
         };
       } finally {
         renderCalls.delete(id);
@@ -195,8 +241,8 @@ export default function (pi: ExtensionAPI & {
     ...(definition.renderCall ? {
       renderCall(args, theme, ctx: RenderContext) {
         if (!ctx.state.workingDirectory) renderCalls.set(ctx.toolCallId, ctx);
-        const bound = ctx.state.workingPath && ctx.state.workingDirectory && args && typeof args === "object"
-          ? { ...args, path: nativePath(ctx.state.workingPath, ctx.state.workingDirectory) } : args;
+        const bound = ctx.state.workingTarget && args && typeof args === "object"
+          ? { ...args, path: pathToFileURL(ctx.state.workingTarget).href } : args;
         return definition.renderCall!(bound, theme, {
           ...ctx,
           cwd: ctx.state.workingDirectory ?? ctx.cwd,
@@ -207,17 +253,18 @@ export default function (pi: ExtensionAPI & {
     } : {}),
     ...(definition.renderResult ? {
       renderResult(result, options, theme, ctx: RenderContext) {
-        const details = result.details as { workingDirectory?: string; workingPath?: string } | undefined;
+        const details = result.details as { workingDirectory?: string; workingPath?: string; workingTarget?: string } | undefined;
         if (details?.workingDirectory) {
           ctx.state.workingDirectory = details.workingDirectory;
           ctx.state.workingPath = details.workingPath;
+          ctx.state.workingTarget = details.workingTarget ?? details.workingPath;
         }
         renderCalls.delete(ctx.toolCallId);
         return definition.renderResult!(result, options, theme, {
           ...ctx,
           cwd: ctx.state.workingDirectory ?? ctx.cwd,
-          args: ctx.state.workingPath && ctx.state.workingDirectory && ctx.args && typeof ctx.args === "object"
-            ? { ...ctx.args, path: nativePath(ctx.state.workingPath, ctx.state.workingDirectory) } : ctx.args,
+          args: ctx.state.workingTarget && ctx.args && typeof ctx.args === "object"
+            ? { ...ctx.args, path: pathToFileURL(ctx.state.workingTarget).href } : ctx.args,
         });
       },
     } : {}),
