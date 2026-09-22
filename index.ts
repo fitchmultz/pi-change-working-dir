@@ -308,7 +308,7 @@ export default function (pi: ExtensionAPI & {
         const executionContext = Object.create(ctx, { cwd: { value: cwd, enumerable: true } }) as ExtensionContext;
         const result = await delegate.execute(id, input, signal, onUpdate, executionContext).catch((error: unknown) => {
           if (error instanceof Error && delegatedPath && path) {
-            error.message = error.message.replaceAll(delegatedPath, target ?? path);
+            error.message = error.message.replaceAll(delegatedPath, () => target ?? path);
           }
           throw error;
         });
@@ -316,7 +316,7 @@ export default function (pi: ExtensionAPI & {
         if (delegatedPath && target && (mutation || result.details?.truncation?.firstLineExceedsLimit)) {
           const displayPath = mutation ? target : `'${target.replaceAll("'", "'\\''")}'`;
           result.content = result.content.map((block) => block.type === "text"
-            ? { ...block, text: block.text.replaceAll(delegatedPath, displayPath) } : block);
+            ? { ...block, text: block.text.replaceAll(delegatedPath, () => displayPath) } : block);
           const header = `--- ${delegatedPath}\n+++ ${delegatedPath}\n`;
           if (typeof result.details?.patch === "string" && result.details.patch.startsWith(header)) {
             result.details.patch = `--- ${target}\n+++ ${target}\n${result.details.patch.slice(header.length)}`;
@@ -343,7 +343,7 @@ export default function (pi: ExtensionAPI & {
           invalidate() {
             const preview = definition.name === "edit" && ctx.state.callComponent?.preview;
             if (typeof preview?.error === "string" && ctx.state.workingTarget) {
-              preview.error = preview.error.replaceAll(pathToFileURL(ctx.state.workingTarget).href, ctx.state.workingTarget);
+              preview.error = preview.error.replaceAll(pathToFileURL(ctx.state.workingTarget).href, () => ctx.state.workingTarget);
             }
             ctx.invalidate();
           },

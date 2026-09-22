@@ -22,14 +22,16 @@ const beforeB = "B_ONLY_CONTEXT\nold text\nB_ONLY_TAIL\n";
 for (const [path, content] of [[a, beforeA], [b, beforeB]]) writeFileSync(join(path!, "same.txt"), content!);
 mkdirSync(join(b, "actual/nested"), { recursive: true });
 symlinkSync(join(b, "actual/nested"), join(b, "link"), process.platform === "win32" ? "junction" : "dir");
-const requested = `link${sep}..${sep}same\u00a0.txt`;
+const fileName = "same\u00a0$$$&$'$`.txt";
+const asciiName = fileName.replace("\u00a0", " ");
+const requested = `link${sep}..${sep}${fileName}`;
 const addressed = `${b}${sep}${requested}`;
-const physicalFile = join(realpathSync.native(`${b}${sep}link${sep}..`), "same\u00a0.txt");
+const physicalFile = join(realpathSync.native(`${b}${sep}link${sep}..`), fileName);
 mkdirSync(join(a, "link"));
-writeFileSync(join(a, "same .txt"), beforeA);
-writeFileSync(join(a, "same\u00a0.txt"), beforeA);
-writeFileSync(join(b, "same\u00a0.txt"), beforeA);
-writeFileSync(join(b, "actual/same .txt"), beforeA);
+writeFileSync(join(a, asciiName), beforeA);
+writeFileSync(join(a, fileName), beforeA);
+writeFileSync(join(b, fileName), beforeA);
+writeFileSync(join(b, "actual", asciiName), beforeA);
 writeFileSync(physicalFile, beforeB);
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -74,7 +76,7 @@ try {
   const result = await executing;
   assert.equal(readFileSync(join(a, "same.txt"), "utf8"), beforeA);
   assert.equal(readFileSync(physicalFile, "utf8"), beforeB.replace("old text", "new text"));
-  assert.equal(readFileSync(join(b, "actual/same .txt"), "utf8"), beforeA);
+  assert.equal(readFileSync(join(b, "actual", asciiName), "utf8"), beforeA);
   assert.equal((result.details as { workingPath: string }).workingPath, input.path, "invocation metadata retains the addressed path");
   component.updateResult({ ...result, isError: false });
   assert.match(render(component), /B_ONLY_CONTEXT/);
@@ -96,11 +98,14 @@ try {
     failed.markExecutionStarted();
     await assert.rejects(() => definition.execute(`failed-${oldText}`, input, undefined, undefined, ctx), error => {
       assert.ok(error instanceof Error);
+      assert.ok(error.message.includes(physicalFile), error.message);
       failed.updateResult({ content: [{ type: "text", text: error.message }], details: undefined, isError: true });
       return true;
     });
     for (let attempt = 0; attempt < 200 && !failed.rendererState.callComponent?.preview?.error; attempt++) await delay(5);
     assert.ok(failed.rendererState.callComponent?.preview?.error, "native failed preview completed");
+    assert.ok(failed.rendererState.callComponent.preview.error.includes(physicalFile),
+      failed.rendererState.callComponent.preview.error);
     const output = render(failed);
     assert.doesNotMatch(output, /file:\/\//);
     assert.equal((output.match(/Could not find the exact text|Found 2 occurrences/g) ?? []).length, 1,

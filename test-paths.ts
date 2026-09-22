@@ -73,7 +73,8 @@ try {
   assert.equal(readFileSync(join(root, "@literal/inside.txt"), "utf8"), "LITERAL");
   await execute("change_dir", { path: root });
 
-  for (const name of ["space\u00a0name.txt", "space\u202fname.txt", "literal%23#.txt"]) {
+  for (const name of ["space\u00a0name.txt", "space\u202fname.txt", "literal%23#.txt",
+    "a$$b.txt", "a$&b.txt", "a$'b.txt", "a$`b.txt"]) {
     writeFileSync(join(root, name), "EXACT\n");
     writeFileSync(join(root, "space name.txt"), "NEIGHBOR\n");
     assert.equal(text(await execute("read", { path: name })), "EXACT");
@@ -131,7 +132,7 @@ try {
   await execute("write", { path: "fallback\u00a0space.txt", content: "EXACT_WRITE" });
   assert.equal(readFileSync(join(root, "fallback\u00a0space.txt"), "utf8"), "EXACT_WRITE");
   assert.equal(readFileSync(join(root, "fallback space.txt"), "utf8"), "ASCII_FALLBACK");
-  const hugeName = "huge '$ literal.txt";
+  const hugeName = "huge '$$ $& $' $` literal.txt";
   writeFileSync(join(root, hugeName), "X".repeat(60_000));
   const hint = text(await execute("read", { path: hugeName }));
   assert.doesNotMatch(hint, /file:\/\//);
@@ -145,9 +146,9 @@ try {
   const literalURL = pathToFileURL(join(root, "url-content.txt")).href;
   writeFileSync(join(root, "url-content.txt"), literalURL);
   assert.equal(text(await execute("read", { path: "url-content.txt" })), literalURL);
-  const errorPath = "errors space\u00a0.txt";
+  const errorPath = "errors space\u00a0$$$&$'$`.txt";
   writeFileSync(join(root, errorPath), "repeat\nrepeat\n");
-  for (const [path, oldText] of [[errorPath, "no match"], [errorPath, "repeat"], ["missing space\u00a0.txt", "old"]]) {
+  for (const [path, oldText] of [[errorPath, "no match"], [errorPath, "repeat"], ["missing space\u00a0$$$&$'$`.txt", "old"]]) {
     await assert.rejects(() => execute("edit", { path, edits: [{ oldText, newText: "new" }] }), error => {
       assert.ok(error instanceof Error);
       assert.doesNotMatch(error.message, /file:\/\//);
