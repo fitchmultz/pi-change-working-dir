@@ -79,8 +79,7 @@ try {
     assert.equal(await execute("bash", { command }), `${target}\nkept\nreloaded:${target}\n${session.sessionId}`);
     const definition = session.getToolDefinition("bash");
     const source = session.getAllTools().find((tool) => tool.name === "bash")!.sourceInfo;
-    if (nativeBashCwd) assert.equal(source.source, "builtin");
-    else assert.equal(source.path, join(process.cwd(), "index.ts"));
+    assert.equal(source.path, join(process.cwd(), "index.ts"), "default Bash uses a snapshot-aware native factory wrapper");
     rmSync(join(origin, ".pi"), { recursive: true });
     rmdirSync(origin);
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -187,7 +186,7 @@ try {
       await session.agent.state.tools.find((tool) => tool.name === "change_dir")!.execute("change", { path: root });
       const input = { command: "custom-owned" };
       await session.extensionRunner.emitToolCall({ type: "tool_call", toolCallId: "custom", toolName: "bash", input });
-      assert.equal(input.command, `cd '${root}' || exit 1\ncustom-owned`);
+      assert.equal(input.command, "custom-owned", "custom executors own their operation-directory integration");
       const result = await session.agent.state.tools.find((tool) => tool.name === "bash")!.execute("custom", input);
       assert.equal(result.content[0]?.type === "text" && result.content[0].text, input.command);
       assert.equal(calls, 1);

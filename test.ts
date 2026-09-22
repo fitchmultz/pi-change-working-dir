@@ -1,620 +1,220 @@
-/** Self-check via Pi's real 0.84+ extension loader: npm test */
+/** Real-loader directory/consumer contract: npm test (no provider calls). */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, symlinkSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { createWriteTool, DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-const sessionCwd = realpathSync(mkdtempSync(join(tmpdir(), "cwd-session-")));
-const spacedSessionCwd = realpathSync(mkdtempSync(join(tmpdir(), "cwd session ")));
-const worktree = realpathSync(mkdtempSync(join(tmpdir(), "cwd-worktree-")));
-const alternateWorktree = realpathSync(mkdtempSync(join(tmpdir(), "cwd-alternate-")));
-const inaccessible = realpathSync(mkdtempSync(join(tmpdir(), "cwd-inaccessible-")));
-const agentDir = realpathSync(mkdtempSync(join(tmpdir(), "cwd-agent-")));
-const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+const {
+  createAgentSession, createReadToolDefinition, DefaultResourceLoader, isToolCallEventType, SessionManager, SettingsManager,
+} = await import(process.env.PI_PACKAGE_DIR
+  ? pathToFileURL(join(process.env.PI_PACKAGE_DIR, "dist/index.js")).href
+  : "@earendil-works/pi-coding-agent") as typeof import("@earendil-works/pi-coding-agent");
+
+const root = realpathSync(mkdtempSync(join(tmpdir(), "cwd-contract-")));
+const origin = join(root, "origin"), target = join(root, "target's directory"), other = join(root, "other");
+const agentDir = join(root, "agent");
+for (const path of [origin, target, other, agentDir]) mkdirSync(path);
+const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = agentDir;
-const worktreeLink = join(sessionCwd, "worktree-link");
-symlinkSync(worktree, worktreeLink, process.platform === "win32" ? "junction" : "dir");
+process.env.PI_OFFLINE = "1";
+for (const [path, text] of [[origin, "ORIGIN"], [target, "TARGET"], [other, "OTHER"]]) {
+  writeFileSync(join(path!, "same.txt"), `${text}\n`);
+}
+const contexts: Array<{ session: Awaited<ReturnType<typeof createAgentSession>>["session"]; api: ExtensionAPI }> = [];
+const channel = "pi-change-working-dir:resolve-execution-cwd";
+const setter = "pi-change-working-dir:set-execution-cwd";
 
-const entries: any[] = [];
-let branchEntries = entries;
-const statuses = new Map<string, string | undefined>();
-const notifications: string[] = [];
-const sentMessages: unknown[] = [];
-
-const createLoader = () => new DefaultResourceLoader({
-  cwd: process.cwd(),
-  agentDir,
-  settingsManager: SettingsManager.inMemory(),
-  additionalExtensionPaths: [join(process.cwd(), "index.ts")],
-  noSkills: true,
-  noPromptTemplates: true,
-  noThemes: true,
-  noContextFiles: true,
-});
-const loadExtension = async (resourceLoader = createLoader()) => {
-  await resourceLoader.reload();
-  const loaded = resourceLoader.getExtensions();
-  loaded.runtime.appendEntry = (customType: string, data: unknown) =>
-    entries.push({ type: "custom", customType, data });
-  loaded.runtime.sendMessage = (message) => sentMessages.push(message);
-  // Exercise custom-tool input routing here; test-bash.ts covers native tool ownership.
-  loaded.runtime.getAllTools = () => [];
-  assert.deepEqual(loaded.errors, []);
-  return loaded.extensions[0]!;
-};
-
-const ext = await loadExtension();
-
-const ctx: any = {
-  cwd: sessionCwd,
-  hasUI: true,
-  mode: "tui",
-  isProjectTrusted: () => true,
-  ui: {
-    setStatus: (key: string, value: string | undefined) => statuses.set(key, value),
-    notify: (message: string) => notifications.push(message),
-  },
-  sessionManager: { getBranch: () => branchEntries },
-};
-const emit = async (extension: typeof ext, name: string, event: any): Promise<any> => {
-  let result: any;
-  for (const fn of extension.handlers.get(name) ?? []) result = await fn(event, ctx);
-  return result;
-};
-const pwd = (cwd?: string, asOptions = false) => new Promise<string>((resolve, reject) => {
-  const child = cwd === undefined ? spawn("pwd") : asOptions ? spawn("pwd", { cwd }) : spawn("pwd", [], { cwd });
-  let out = "";
-  child.stdout?.on("data", (chunk: Buffer) => {
-    out += chunk;
+async function setup(options: { cwd?: string; bind?: boolean; customFirst?: boolean; factory?: (pi: ExtensionAPI) => void } = {}) {
+  const cwd = options.cwd ?? origin;
+  let api!: ExtensionAPI;
+  const settingsManager = SettingsManager.inMemory();
+  const loader = new DefaultResourceLoader({
+    cwd, agentDir, settingsManager,
+    noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+    additionalExtensionPaths: [join(process.cwd(), "index.ts")],
+    extensionFactories: [(pi) => { api = pi; options.factory?.(pi); }],
+    extensionsOverride: options.customFirst ? (loaded) => ({ ...loaded, extensions: [...loaded.extensions].reverse() }) : undefined,
   });
-  child.on("error", reject);
-  child.on("close", () => resolve(realpathSync(out.trim() || ".")));
-});
-const changeDir = ext.tools.get("change_dir")!.definition;
-assert.equal(changeDir.executionMode, "sequential");
-
-// No override: inputs remain untouched.
-let event: any = { toolName: "bash", input: { command: "ls" } };
-if (process.platform !== "win32") assert.equal(await pwd(sessionCwd), sessionCwd);
-await emit(ext, "tool_call", event);
-assert.equal(event.input.command, "ls");
-assert.deepEqual(await emit(ext, "session_checkpoint", {}), { sleepReady: true });
-const rootCursorInput = { path: "src/", exclude: "test/" };
-await emit(ext, "tool_result", {
-  toolName: "ffgrep",
-  input: rootCursorInput,
-  content: [{ type: "text", text: "src/a.ts\n 1: match\n\n[Continue with cursor=\"fff_c0\"]" }],
-  isError: false,
-});
-event = { toolName: "ffgrep", input: { pattern: "x", cursor: "fff_c0" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.path, rootCursorInput.path);
-assert.equal(event.input.exclude, rootCursorInput.exclude);
-assert.deepEqual(await emit(ext, "session_checkpoint", {}), {
-  sleepReady: false, reason: "FFF cursor routes are memory-only",
-});
-// Refusing sleep does not consume the cursor or disable FFF.
-assert.equal((await emit(ext, "tool_call", event))?.block, undefined);
-
-// change_dir rejects empty, missing, and inaccessible directories.
-await assert.rejects(() => changeDir.execute("t0", { path: "" }, undefined, undefined, ctx), /Path is required/);
-await assert.rejects(() => changeDir.execute("t1", { path: "/nope/nothing" }, undefined, undefined, ctx), /Not an accessible directory/);
-if (process.platform !== "win32") {
-  chmodSync(inaccessible, 0o000);
-  await assert.rejects(() => changeDir.execute("t2", { path: inaccessible }, undefined, undefined, ctx), /Not an accessible directory/);
-  chmodSync(inaccessible, 0o700);
-}
-
-// Supported tilde separators resolve to the home directory.
-const home = realpathSync(homedir());
-for (const path of ["~/", ...(sep === "\\" ? ["~\\"] : [])]) {
-  const homeResult = await changeDir.execute("tilde", { path }, undefined, undefined, ctx);
-  assert.ok((homeResult.content[0] as { text: string }).text.includes(home));
-}
-await changeDir.execute("tilde-reset", { path: sessionCwd }, undefined, undefined, ctx);
-
-// Switching through a symlink canonicalizes the cwd and duplicate changes do not add session entries.
-const res = await changeDir.execute("t3", { path: worktreeLink }, undefined, undefined, ctx);
-const firstContent = res.content[0];
-assert.equal(firstContent?.type, "text");
-assert.match(firstContent.text, new RegExp(worktree));
-assert.equal(statuses.get("cwd"), `cwd: ${worktree}`);
-const entryCount = entries.length;
-await changeDir.execute("t4", { path: worktree }, undefined, undefined, ctx);
-assert.equal(entries.length, entryCount);
-if (sep !== "\\") {
-  const literalBackslashTilde = join(worktree, "~\\literal");
-  mkdirSync(literalBackslashTilde);
-  await changeDir.execute("literal-tilde", { path: "~\\literal" }, undefined, undefined, ctx);
-  assert.equal(statuses.get("cwd"), `cwd: ${literalBackslashTilde}`);
-  await changeDir.execute("literal-tilde-reset", { path: worktree }, undefined, undefined, ctx);
-}
-
-// Bash gets a safely quoted cwd prefix.
-event = { toolName: "bash", input: { command: "git status" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.command, `cd '${worktree}' || exit 1\ngit status`);
-const rootCursorAfterChange = await emit(ext, "tool_call", {
-  toolName: "ffgrep",
-  input: { pattern: "x", cursor: "fff_c0" },
-});
-assert.equal(rootCursorAfterChange.block, true);
-assert.match(rootCursorAfterChange.reason, /different working directory/);
-
-// Built-in and FFF paths resolve from the virtual cwd.
-event = { toolName: "read", input: { path: "src/main.ts" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.path, join(worktree, "src/main.ts"));
-event = { toolName: "read", input: { path: "@src/main.ts" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.path, join(worktree, "src/main.ts"));
-event = { toolName: "read", input: { path: "~/file.ts" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.path, join(homedir(), "file.ts"));
-event = { toolName: "edit", input: { path: "/abs/file.ts" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.path, "/abs/file.ts");
-event = { toolName: "read", input: { path: pathToFileURL(join(worktree, "src/main.ts")).href } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.path, join(worktree, "src/main.ts"));
-event = { toolName: "grep", input: { pattern: "x" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.path, worktree);
-for (const toolName of ["ls", "grep", "find", "ffgrep", "fffind"]) {
-  event = { toolName, input: { path: "" } };
-  await emit(ext, "tool_call", event);
-  assert.equal(event.input.path, worktree);
-}
-event = { toolName: "ffgrep", input: { pattern: "x" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.path, worktree);
-event = { toolName: "fffind", input: { pattern: "main", path: "src" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.path, join(worktree, "src"));
-event = { toolName: "fffind", input: { pattern: "main", path: "@scope" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.path, join(worktree, "@scope"));
-const outsideWhitespacePath = await emit(ext, "tool_call", {
-  toolName: "fffind",
-  input: { pattern: "main", path: "relative path.ts" },
-});
-assert.equal(outsideWhitespacePath.block, true);
-assert.match(outsideWhitespacePath.reason, /path constraint/);
-const absoluteWhitespacePath = await emit(ext, "tool_call", {
-  toolName: "fffind",
-  input: { pattern: "main", path: pathToFileURL(join(alternateWorktree, "file name.ts")).href },
-});
-assert.equal(absoluteWhitespacePath.block, true);
-assert.match(absoluteWhitespacePath.reason, /path constraint/);
-
-// apply_edits and subagent receive the virtual cwd too.
-event = { toolName: "apply_edits", input: { path: "a.ts", files: [{ path: "b.ts" }, { path: "/abs/c.ts" }] } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.path, join(worktree, "a.ts"));
-assert.equal(event.input.files[0].path, join(worktree, "b.ts"));
-assert.equal(event.input.files[1].path, "/abs/c.ts");
-event = { toolName: "apply_edits", input: { path: "@file.ts" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.path, join(worktree, "@file.ts"));
-event = { toolName: "subagent", input: { agent: "scout", task: "pwd" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.cwd, worktree);
-event = { toolName: "subagent", input: { agent: "scout", task: "pwd", cwd: "src" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.cwd, join(worktree, "src"));
-event = { toolName: "subagent", input: { agent: "scout", task: "pwd", cwd: "" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.cwd, worktree);
-event = { toolName: "subagent", input: { agent: "scout", task: "pwd", cwd: "@scope" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.cwd, join(worktree, "@scope"));
-for (const input of [
-  { tasks: [{ agent: "scout", task: "pwd" }] },
-  { chain: [{ agent: "scout", task: "pwd" }] },
-]) {
-  event = { toolName: "subagent", input };
-  await emit(ext, "tool_call", event);
-  assert.equal(event.input.cwd, worktree);
-}
-
-// FFF constraints and returned paths stay relative to a descendant virtual cwd.
-const descendant = join(sessionCwd, "packages", "app");
-mkdirSync(join(descendant, "test"), { recursive: true });
-mkdirSync(join(descendant, "test.old"));
-await changeDir.execute("descendant", { path: descendant }, undefined, undefined, ctx);
-event = { toolName: "ffgrep", input: { pattern: "x", path: "missing.ts" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.pattern, "(?:x)");
-const malformedFilePattern: any = { toolName: "ffgrep", input: { pattern: "[", path: "missing.ts" } };
-await emit(ext, "tool_call", malformedFilePattern);
-assert.equal(malformedFilePattern.input.pattern, "(?:\\[)");
-const fuzzyLeakResult = await emit(ext, "tool_result", {
-  toolName: "ffgrep",
-  input: event.input,
-  content: [{
-    type: "text",
-    text: "[0 exact matches. Maybe you meant this?]\npackages/other/outside.ts\n 1: x\n\n[Continue with cursor=\"fff_c88\"]",
-  }],
-  isError: false,
-});
-assert.equal(fuzzyLeakResult.isError, true);
-assert.doesNotMatch(fuzzyLeakResult.content[0].text, /outside\.ts/);
-const fuzzyCursor = await emit(ext, "tool_call", {
-  toolName: "ffgrep",
-  input: { pattern: "x", cursor: "fff_c88" },
-});
-assert.equal(fuzzyCursor.block, true);
-
-event = { toolName: "ffgrep", input: { pattern: "x", path: "", exclude: "test/, !generated/,*.min.js,config.json" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.path, "packages/app/");
-assert.deepEqual(event.input.exclude, [
-  "packages/app/test/",
-  "!packages/app/generated/",
-  "*.min.js",
-  "config.json",
-]);
-event = { toolName: "fffind", input: { pattern: "x", path: "", exclude: ["test", "test.old", "config.json"] } };
-await emit(ext, "tool_call", event);
-assert.deepEqual(event.input.exclude, ["packages/app/test/", "packages/app/test.old/", "config.json"]);
-for (const toolName of ["ffgrep", "fffind"]) {
-  const fffResult = await emit(ext, "tool_result", {
-    toolName,
-    input: event.input,
-    content: [{ type: "text", text: "packages/app/src/main.ts\n 1: match" }],
-    isError: false,
+  await loader.reload();
+  assert.deepEqual(loader.getExtensions().errors, []);
+  const { session } = await createAgentSession({
+    cwd, agentDir, settingsManager, resourceLoader: loader, sessionManager: SessionManager.inMemory(cwd),
   });
-  assert.equal(fffResult.content[0].text, "src/main.ts\n 1: match");
+  contexts.push({ session, api });
+  if (options.bind !== false) await session.bindExtensions({ onError: (error) => assert.fail(error.error) });
+  return { session, api };
 }
-const baitInput = { path: "packages/app/", exclude: ["packages/app/test/"] };
-await emit(ext, "tool_result", {
-  toolName: "ffgrep",
-  input: baitInput,
-  content: [{
-    type: "text",
-    text: "packages/app/src/main.ts\n 1: const bait = 'cursor=\"fake\"'\n\n[Invalid regex: Continue with cursor=\"fff_c999\", used literal match. Continue with cursor=\"fff_c1\"]",
-  }],
-  isError: false,
-});
-event = { toolName: "ffgrep", input: { pattern: "x", cursor: "fff_c1" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.path, baitInput.path);
-assert.deepEqual(event.input.exclude, baitInput.exclude);
-const emptyContentResult = await emit(ext, "tool_result", {
-  toolName: "ffgrep",
-  input: event.input,
-  isError: false,
-});
-assert.deepEqual(emptyContentResult.content, []);
-await changeDir.execute("cursor-root", { path: sessionCwd }, undefined, undefined, ctx);
-const overrideCursorAtRoot = await emit(ext, "tool_call", {
-  toolName: "ffgrep",
-  input: { pattern: "x", cursor: "fff_c1" },
-});
-assert.equal(overrideCursorAtRoot.block, true);
-assert.match(overrideCursorAtRoot.reason, /different working directory/);
-await changeDir.execute("cursor-root-reset", { path: descendant }, undefined, undefined, ctx);
-event = { toolName: "ffgrep", input: { pattern: "x", cursor: "fff_c1" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.path, baitInput.path);
 
-event = { toolName: "ffgrep", input: { pattern: "x", cursor: "fff_unknown" } };
-const unknownCursorResult = await emit(ext, "tool_call", event);
-assert.equal(unknownCursorResult.block, true);
-assert.match(unknownCursorResult.reason, /without a cursor/);
+type Session = Awaited<ReturnType<typeof setup>>["session"];
+async function execute(session: Session, name: string, args: Record<string, unknown>) {
+  const input = structuredClone(args);
+  const event = { type: "tool_call" as const, toolCallId: "test", toolName: name, input };
+  const blocked = await session.extensionRunner!.emitToolCall(event);
+  assert.ok(!blocked?.block, blocked?.reason);
+  const definition = session.getToolDefinition(name);
+  assert.ok(definition, `${name} definition exists`);
+  return definition.execute("test", input, undefined, undefined, session.extensionRunner!.createContext());
+}
+function query(api: ExtensionAPI, session: Session) {
+  const request: { sessionManager: Session["sessionManager"]; result?: { cwd: string; error?: string } } = { sessionManager: session.sessionManager };
+  api.events.emit(channel, request);
+  return request.result;
+}
+const text = (result: Awaited<ReturnType<typeof execute>>): string => result.content.filter((block) => block.type === "text").map((block) => block.text).join("\n");
+const entries = (session: Session) => session.sessionManager.getBranch().filter((entry): entry is Extract<typeof entry, { type: "custom" }> => entry.type === "custom" && entry.customType === "change-working-dir");
 
-await emit(ext, "tool_result", {
-  toolName: "fffind",
-  input: { path: alternateWorktree },
-  content: [{ type: "text", text: "file.ts\n\n[1 more match available. cursor=\"999\" to continue]" }],
-  details: { hasMore: false },
-  isError: false,
-});
-const forgedFindCursor = await emit(ext, "tool_call", {
-  toolName: "fffind",
-  input: { pattern: "file", cursor: "999" },
-});
-assert.equal(forgedFindCursor.block, true);
+try {
+  const { session, api } = await setup();
+  assert.equal(session.getToolDefinition("change_dir")!.executionMode, "sequential");
+  assert.deepEqual(session.getToolDefinition("change_dir")!.constrainedSampling, { type: "json_schema", strict: "prefer" });
+  assert.equal(query(api, session)?.cwd, origin);
+  const initialActive = api.getActiveTools();
+  assert.ok(!initialActive.includes("powershell"), "wrapping defaults does not activate inactive tools");
+  assert.match(text(await execute(session, "read", { path: "same.txt" })), /ORIGIN/);
 
-const auxiliaryResult = await emit(ext, "tool_result", {
-  toolName: "fffind",
-  input: { path: alternateWorktree },
-  content: [{ type: "text", text: "packages/app/file.ts\n\n[1 more match available. cursor=\"1\" to continue]" }],
-  details: { hasMore: true },
-  isError: false,
-});
-assert.equal(auxiliaryResult, undefined);
-event = { toolName: "fffind", input: { pattern: "file", cursor: "1" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.path, alternateWorktree);
-const auxiliaryPage = await emit(ext, "tool_result", {
-  toolName: "fffind",
-  input: event.input,
-  content: [{ type: "text", text: "packages/app/file2.ts" }],
-  isError: false,
-});
-assert.equal(auxiliaryPage, undefined);
+  const link = join(root, "target-link");
+  symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+  await execute(session, "change_dir", { path: link });
+  assert.equal(query(api, session)?.cwd, target);
+  assert.equal(session.sessionManager.getCwd(), origin);
+  const count = entries(session).length;
+  await execute(session, "change_dir", { path: target });
+  assert.equal(entries(session).length, count, "duplicate directory selection is not appended");
+  const selectedEntry = entries(session).at(-1)!;
+  for (const path of ["same.txt", "@same.txt", pathToFileURL(join(target, "same.txt")).href]) {
+    assert.match(text(await execute(session, "read", { path })), /TARGET/);
+  }
+  assert.match(text(await execute(session, "read", { path: join(origin, "same.txt") })), /ORIGIN/);
+  assert.match(text(await execute(session, "ls", {})), /same\.txt/);
+  await execute(session, "write", { path: "nested/new.txt", content: "new\n" });
+  assert.equal(readFileSync(join(target, "nested/new.txt"), "utf8"), "new\n");
+  await execute(session, "edit", { path: "nested/new.txt", edits: [{ oldText: "new", newText: "edited" }] });
+  assert.equal(readFileSync(join(target, "nested/new.txt"), "utf8"), "edited\n");
+  assert.ok(!existsSync(join(origin, "nested")));
 
-// Separate upstream cursor caches mean heavy find pagination cannot evict a live grep route.
-for (let index = 2; index <= 202; index += 1) {
-  await emit(ext, "tool_result", {
-    toolName: "fffind",
-    input: { path: alternateWorktree },
-    content: [{ type: "text", text: `file.ts\n\n[1 more match available. cursor="${index}" to continue]` }],
-    details: { hasMore: true },
-    isError: false,
+  // Native shell parameters stay intact; admission captures A before an awaited policy.
+  let releasePolicy!: () => void;
+  const policyWait = new Promise<void>((resolve) => { releasePolicy = resolve; });
+  let policyEntered!: () => void;
+  const entered = new Promise<void>((resolve) => { policyEntered = resolve; });
+  const invocation = { type: "tool_call" as const, toolCallId: "admitted", toolName: "write", input: { path: "admitted.txt", content: "pinned\n" } };
+  const stopPolicy = api.on("tool_call", async (event) => {
+    if (event.toolCallId !== "admitted" || !isToolCallEventType("write", event)) return;
+    assert.equal(event.input.path, join(target, "admitted.txt"));
+    policyEntered();
+    await policyWait;
   });
+  const admission = session.extensionRunner!.emitToolCall(invocation);
+  await entered;
+  await execute(session, "change_dir", { path: other });
+  releasePolicy();
+  await admission;
+  await session.getToolDefinition("write")!.execute("admitted", invocation.input, undefined, undefined, session.extensionRunner!.createContext());
+  stopPolicy();
+  assert.equal(readFileSync(join(target, "admitted.txt"), "utf8"), "pinned\n");
+  assert.ok(!existsSync(join(other, "admitted.txt")));
+
+  // Explicit and omitted subprocess roots are never intercepted globally.
+  assert.equal(realpathSync((await api.exec(process.execPath, ["-p", "process.cwd()"], { cwd: origin })).stdout.trim()), origin);
+  assert.equal(realpathSync((await api.exec(process.execPath, ["-p", "process.cwd()"])).stdout.trim()), origin);
+  assert.equal(realpathSync((await api.exec(process.execPath, ["-p", "process.cwd()"], { cwd: target })).stdout.trim()), target);
+  const second = await setup({ cwd: other });
+  await execute(second.session, "change_dir", { path: target });
+  assert.equal(query(api, session)?.cwd, other);
+  assert.equal(query(second.api, second.session)?.cwd, target);
+  const wrongSession = { sessionManager: second.session.sessionManager, result: undefined };
+  api.events.emit(channel, wrongSession);
+  assert.equal(wrongSession.result, undefined);
+
+  // The owner's setter uses the same validation/persistence as the tool.
+  const setRequest = { sessionManager: session.sessionManager, path: target, result: undefined as { cwd: string; error?: string } | undefined };
+  api.events.emit(setter, setRequest);
+  assert.deepEqual(setRequest.result, { cwd: target });
+  api.events.emit(setter, { ...setRequest, path: "" });
+  assert.equal(query(api, session)?.cwd, target);
+  await assert.rejects(() => execute(session, "change_dir", { path: "" }), /Path is required/);
+  await assert.rejects(() => execute(session, "change_dir", { path: join(root, "missing") }), /Not an accessible directory/);
+  await assert.rejects(() => execute(session, "change_dir", { path: join(target, "same.txt") }), /Not an accessible directory/);
+  if (process.platform !== "win32") {
+    const denied = join(root, "denied"); mkdirSync(denied); chmodSync(denied, 0);
+    await assert.rejects(() => execute(session, "change_dir", { path: denied }), /Not an accessible directory/);
+    chmodSync(denied, 0o700);
+    const control = join(root, "line\nbreak"); mkdirSync(control);
+    await assert.rejects(() => execute(session, "change_dir", { path: control }), /control characters/);
+    for (const name of ["literal\\directory", "nonbreaking\u00a0directory"]) {
+      const literal = join(root, name); mkdirSync(literal); writeFileSync(join(literal, "same.txt"), "LITERAL\n");
+      await execute(session, "change_dir", { path: literal });
+      assert.match(text(await execute(session, "read", { path: "same.txt" })), /LITERAL/);
+    }
+  }
+
+  // Branch selection survives reload/tree; reset is relative to the runtime anchor.
+  await execute(session, "change_dir", { path: target });
+  await session.reload();
+  assert.throws(() => query(api, session), /stale/, "old event-bus API is invalidated on reload");
+  const ctx = session.extensionRunner!.createContext();
+  assert.equal(ctx.cwd, origin);
+  assert.match(text(await execute(session, "read", { path: "same.txt" })), /TARGET/);
+  await execute(session, "change_dir", { path: other });
+  await session.navigateTree(selectedEntry.id, { summarize: false });
+  assert.match(text(await execute(session, "read", { path: "same.txt" })), /TARGET/);
+  await session.prompt("/cwd -");
+  assert.match(text(await execute(session, "read", { path: "same.txt" })), /ORIGIN/);
+
+  // A live deleted root never gets recreated, even via an absolute write elsewhere.
+  const removed = join(root, "removed"); mkdirSync(removed);
+  await execute(session, "change_dir", { path: removed });
+  rmSync(removed, { recursive: true });
+  await assert.rejects(() => execute(session, "write", { path: "new.txt", content: "no" }), /Working directory unavailable/);
+  await assert.rejects(() => execute(session, "write", { path: join(other, "blocked.txt"), content: "no" }), /Working directory unavailable/);
+  assert.ok(!existsSync(removed)); assert.ok(!existsSync(join(other, "blocked.txt")));
+  // Restoring an unavailable SAVED selection preserves it but falls back to origin.
+  await session.reload();
+  assert.match(text(await execute(session, "read", { path: "same.txt" })), /ORIGIN/);
+  assert.deepEqual(entries(session).at(-1)?.data, { dir: removed });
+  mkdirSync(removed); writeFileSync(join(removed, "same.txt"), "RETURNED\n");
+  assert.match(text(await execute(session, "read", { path: "same.txt" })), /ORIGIN/);
+  await session.reload();
+  assert.match(text(await execute(session, "read", { path: "same.txt" })), /RETURNED/);
+  await session.prompt("/cwd -");
+
+  // Custom definitions are never replaced, rebased or stripped of their executor.
+  const customRead = createReadToolDefinition(other);
+  let customContext: ExtensionContext | undefined;
+  const custom = await setup({ factory(pi) {
+    pi.registerTool({ ...customRead, async execute(id, args, signal, update, executionContext) {
+      customContext = executionContext;
+      return customRead.execute(id, args, signal, update, executionContext);
+    } });
+  } });
+  await execute(custom.session, "change_dir", { path: target });
+  await execute(custom.session, "read", { path: "same.txt" });
+  assert.equal(customContext?.cwd, origin, "uncooperating custom tool retains its native context");
+  assert.notEqual(custom.session.getAllTools().find((tool) => tool.name === "read")?.sourceInfo.path, join(process.cwd(), "index.ts"));
+
+  // Native runtime registration can replace an adapter; routing follows its current owner.
+  const late = await setup({ customFirst: true });
+  let latePath: string | undefined;
+  late.api.registerTool({ ...createReadToolDefinition(origin), async execute(_id, params) {
+    latePath = params.path;
+    return { content: [{ type: "text", text: "custom read" }], details: {} };
+  } });
+  await execute(late.session, "change_dir", { path: target });
+  await execute(late.session, "read", { path: "same.txt" });
+  assert.equal(latePath, "same.txt", "late custom registration retains its original arguments");
+
+  // /cwd before binding/first prompt initializes the owner without a model call.
+  const bare = await setup({ bind: false });
+  assert.equal(query(bare.api, bare.session), undefined);
+  await bare.session.prompt(`/cwd ${target}`);
+  assert.equal(query(bare.api, bare.session)?.cwd, target);
+  assert.match(text(await execute(bare.session, "read", { path: "same.txt" })), /TARGET/);
+  console.log("ok: real directory owner, native tools, policy snapshot, branches, recovery, SDK startup and process isolation");
+} finally {
+  for (const { session } of contexts) session.dispose();
+  if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+  rmSync(root, { recursive: true, force: true });
 }
-event = { toolName: "ffgrep", input: { pattern: "x", cursor: "fff_c1" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.path, baitInput.path);
-
-event = { toolName: "ffgrep", input: { pattern: "x", path: ".." } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.path, "packages/");
-const ancestorResult = await emit(ext, "tool_result", {
-  toolName: "ffgrep",
-  input: event.input,
-  content: [{ type: "text", text: "packages/app/keep.ts\n\npackages/other/x.ts" }],
-  isError: false,
-});
-assert.equal(ancestorResult, undefined);
-
-// Dotted directory names remain directory constraints instead of looking like filenames to FFF.
-const dottedDescendant = join(sessionCwd, ".github");
-mkdirSync(dottedDescendant);
-await changeDir.execute("dotted-descendant", { path: dottedDescendant }, undefined, undefined, ctx);
-event = { toolName: "fffind", input: { pattern: "x", path: "" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.path, ".github/");
-const staleCursorResult = await emit(ext, "tool_call", {
-  toolName: "ffgrep",
-  input: { pattern: "x", cursor: "fff_c1" },
-});
-assert.equal(staleCursorResult.block, true);
-assert.match(staleCursorResult.reason, /different working directory/);
-
-const bangDescendant = join(sessionCwd, "!target");
-mkdirSync(bangDescendant);
-await changeDir.execute("bang-descendant", { path: bangDescendant }, undefined, undefined, ctx);
-const bangPathResult = await emit(ext, "tool_call", {
-  toolName: "ffgrep",
-  input: { pattern: "x", path: "" },
-});
-assert.equal(bangPathResult.block, true);
-assert.match(bangPathResult.reason, /path constraint/);
-
-// Session-root whitespace is removed before excludes reach FFF's whitespace-splitting parser.
-const spacedDescendant = join(spacedSessionCwd, "packages", "app");
-mkdirSync(spacedDescendant, { recursive: true });
-ctx.cwd = spacedSessionCwd;
-await changeDir.execute("spaced-descendant", { path: spacedDescendant }, undefined, undefined, ctx);
-event = { toolName: "ffgrep", input: { pattern: "x", path: "", exclude: "test/" } };
-await emit(ext, "tool_call", event);
-assert.equal(event.input.path, "packages/app/");
-assert.deepEqual(event.input.exclude, ["packages/app/test/"]);
-ctx.cwd = sessionCwd;
-await changeDir.execute("descendant-reset", { path: worktree }, undefined, undefined, ctx);
-
-// FFF cannot safely represent whitespace inside its session-relative path grammar.
-const spacedPathDescendant = join(sessionCwd, "spaced app");
-mkdirSync(spacedPathDescendant);
-await changeDir.execute("spaced-path", { path: spacedPathDescendant }, undefined, undefined, ctx);
-const blockedFff = await emit(ext, "tool_call", { toolName: "ffgrep", input: { pattern: "x", path: "" } });
-assert.equal(blockedFff.block, true);
-assert.match(blockedFff.reason, /path constraint/);
-await changeDir.execute("spaced-path-reset", { path: worktree }, undefined, undefined, ctx);
-
-// Only Pi's final authoritative cwd line is rewritten; fallback still works.
-let result = await emit(ext, "before_agent_start", {
-  systemPrompt: `Current working directory: example from context\nintro\nCurrent working directory: ${sessionCwd}`,
-});
-assert.equal(result.systemPrompt, `Current working directory: example from context\nintro\nCurrent working directory: ${worktree}`);
-result = await emit(ext, "before_agent_start", {
-  systemPrompt: `Current working directory: ${sessionCwd}\nprose with Current working directory: an example`,
-});
-assert.equal(result.systemPrompt, `Current working directory: ${worktree}\nprose with Current working directory: an example`);
-result = await emit(ext, "before_agent_start", { systemPrompt: "base" });
-assert.match(result.systemPrompt, new RegExp(worktree));
-
-// test-bash.ts exercises user Bash through real sessions: the fork's native cwd hook
-// intentionally needs no user_bash operations override, unlike the official fallback.
-if (process.platform !== "win32") {
-  assert.equal(await pwd(sessionCwd), worktree);
-  assert.equal(await pwd(sessionCwd, true), worktree);
-  assert.equal(await pwd(), worktree);
-  assert.equal(await pwd(alternateWorktree), alternateWorktree);
-  assert.throws(() => spawn("pwd", "oops" as never), { code: "ERR_INVALID_ARG_TYPE" });
-  assert.throws(() => spawn("pwd", [], null as never), { code: "ERR_INVALID_ARG_TYPE" });
-}
-
-// Control-character directories are rejected before their paths reach tools.
-if (process.platform !== "win32") {
-  const controlDir = join(sessionCwd, "line\nbreak\u007f\u0085");
-  mkdirSync(controlDir);
-  await assert.rejects(
-    () => changeDir.execute("control", { path: controlDir }, undefined, undefined, ctx),
-    (error: unknown) => {
-      assert.ok(error instanceof Error);
-      assert.ok(error.message.includes("line\\nbreak\\u007f\\u0085"));
-      return true;
-    },
-  );
-  event = { toolName: "bash", input: { command: "pwd" } };
-  await emit(ext, "tool_call", event);
-  assert.equal(event.input.command, `cd '${worktree}' || exit 1\npwd`);
-}
-
-// A fresh extension instance restores the active branch.
-const ext2 = await loadExtension();
-const changeDir2 = ext2.tools.get("change_dir")!.definition;
-await emit(ext2, "session_start", {});
-assert.deepEqual(await emit(ext2, "session_checkpoint", {}), { sleepReady: true });
-branchEntries = [];
-assert.deepEqual(await emit(ext2, "session_checkpoint", {}), {
-  sleepReady: false, reason: "Working directory differs from the selected branch restore",
-});
-branchEntries = entries;
-event = { toolName: "bash", input: { command: "pwd" } };
-await emit(ext2, "tool_call", event);
-assert.equal(event.input.command, `cd '${worktree}' || exit 1\npwd`);
-
-// A command change followed by tree navigation keeps only the selected branch's cwd context.
-const worktreeBranch = [...entries];
-await ext2.commands.get("cwd")!.handler(alternateWorktree, ctx);
-result = await emit(ext2, "before_agent_start", { systemPrompt: "base" });
-assert.match(result.systemPrompt, new RegExp(alternateWorktree));
-branchEntries = worktreeBranch;
-await emit(ext2, "session_tree", {});
-result = await emit(ext2, "before_agent_start", { systemPrompt: "base" });
-assert.match(result.systemPrompt, new RegExp(worktree));
-assert.doesNotMatch(result.systemPrompt, new RegExp(alternateWorktree));
-assert.deepEqual(sentMessages, []);
-
-// Tree navigation restores the selected branch instead of leaking the old branch's cwd.
-branchEntries = [];
-await emit(ext2, "session_tree", {});
-event = { toolName: "bash", input: { command: "pwd" } };
-await emit(ext2, "tool_call", event);
-assert.equal(event.input.command, "pwd");
-branchEntries = worktreeBranch;
-await emit(ext2, "session_tree", {});
-event = { toolName: "bash", input: { command: "pwd" } };
-await emit(ext2, "tool_call", event);
-assert.equal(event.input.command, `cd '${worktree}' || exit 1\npwd`);
-
-// Malformed and missing persisted directories are ignored safely.
-branchEntries = [{ type: "custom", customType: "change-working-dir", data: { dir: { bad: true } } }];
-await emit(ext2, "session_tree", {});
-event = { toolName: "bash", input: { command: "pwd" } };
-await emit(ext2, "tool_call", event);
-assert.equal(event.input.command, "pwd");
-assert.match(notifications.at(-1)!, /invalid saved working directory/);
-branchEntries = [{ type: "custom", customType: "change-working-dir", data: { dir: "relative/path" } }];
-await emit(ext2, "session_tree", {});
-assert.match(notifications.at(-1)!, /invalid saved working directory/);
-branchEntries = [{ type: "custom", customType: "change-working-dir", data: { dir: "/nope/missing-cwd" } }];
-await emit(ext2, "session_tree", {});
-event = { toolName: "bash", input: { command: "pwd" } };
-await emit(ext2, "tool_call", event);
-assert.equal(event.input.command, "pwd");
-assert.match(notifications.at(-1)!, /Saved working directory unavailable/);
-
-// Explicit reset also replaces malformed persisted state even though both effective dirs are the session cwd.
-entries.push({ type: "custom", customType: "change-working-dir", data: { dir: { bad: true } } });
-branchEntries = entries;
-await emit(ext2, "session_tree", {});
-const malformedEntryCount = entries.length;
-await changeDir2.execute("reset-malformed", { path: sessionCwd }, undefined, undefined, ctx);
-assert.equal(entries.length, malformedEntryCount + 1);
-assert.equal(entries.at(-1).data.dir, undefined);
-
-// If an unavailable saved path returns, an explicit change activates it even though persistence already matches.
-const restoredThenChanged = realpathSync(mkdtempSync(join(tmpdir(), "cwd-returned-")));
-rmSync(restoredThenChanged, { recursive: true });
-entries.push({ type: "custom", customType: "change-working-dir", data: { dir: restoredThenChanged } });
-branchEntries = entries;
-await emit(ext2, "session_tree", {});
-mkdirSync(restoredThenChanged);
-await changeDir2.execute("activate-returned", { path: restoredThenChanged }, undefined, undefined, ctx);
-event = { toolName: "bash", input: { command: "pwd" } };
-await emit(ext2, "tool_call", event);
-assert.equal(event.input.command, `cd '${restoredThenChanged}' || exit 1\npwd`);
-await changeDir2.execute("activate-returned-reset", { path: sessionCwd }, undefined, undefined, ctx);
-
-// An explicit reset clears unavailable persisted state instead of resurrecting it later.
-const unavailableThenRestored = realpathSync(mkdtempSync(join(tmpdir(), "cwd-restored-")));
-rmSync(unavailableThenRestored, { recursive: true });
-entries.push({ type: "custom", customType: "change-working-dir", data: { dir: unavailableThenRestored } });
-branchEntries = entries;
-await emit(ext2, "session_tree", {});
-await changeDir2.execute("reset-unavailable", { path: sessionCwd }, undefined, undefined, ctx);
-mkdirSync(unavailableThenRestored);
-await emit(ext2, "session_tree", {});
-event = { toolName: "bash", input: { command: "pwd" } };
-await emit(ext2, "tool_call", event);
-assert.equal(event.input.command, "pwd");
-
-// A removed active directory must not be recreated by write's recursive mkdir.
-const removedName = "Removed worktrée";
-const removedDir = join(worktree, removedName);
-mkdirSync(removedDir);
-await changeDir2.execute("removed-set", { path: join(worktreeLink, removedName) }, undefined, undefined, ctx);
-rmdirSync(removedDir);
-const write = createWriteTool(sessionCwd);
-const routedWrite = async (path: string) => {
-  const event = { toolName: "write", input: { path, content: "kept\n" } };
-  await emit(ext2, "tool_call", event);
-  return write.execute("removed-write", event.input);
-};
-await assert.rejects(() => routedWrite("result.txt"), /Working directory unavailable/);
-for (const path of [
-  join(removedDir, "result.txt"),
-  join(worktreeLink, removedName, "nested", "result.txt"),
-  join(worktree, removedName.toLowerCase(), "result.txt"),
-  join(worktree, removedName.normalize("NFD"), "result.txt"),
-  join(worktree, removedName.replace(" ", "\u00a0"), "result.txt"),
-  join(alternateWorktree, "outside.txt"),
-]) {
-  await assert.rejects(() => routedWrite(path), /Working directory unavailable/, path);
-}
-assert.equal(existsSync(removedDir), false);
-assert.equal(existsSync(join(alternateWorktree, "outside.txt")), false);
-// Restoring the path recovers without a reset; selecting another cwd also recovers.
-mkdirSync(removedDir);
-await routedWrite("result.txt");
-assert.equal(readFileSync(join(removedDir, "result.txt"), "utf8"), "kept\n");
-rmSync(removedDir, { recursive: true });
-await changeDir2.execute("removed-recover", { path: alternateWorktree }, undefined, undefined, ctx);
-await routedWrite(join(alternateWorktree, "outside.txt"));
-assert.equal(readFileSync(join(alternateWorktree, "outside.txt"), "utf8"), "kept\n");
-
-// Shutdown clears stale footer state, and resetting to the session cwd persists.
-branchEntries = worktreeBranch;
-await emit(ext2, "session_tree", {});
-assert.equal(statuses.get("cwd"), `cwd: ${worktree}`);
-await emit(ext2, "session_shutdown", {});
-assert.equal(statuses.get("cwd"), undefined);
-if (process.platform !== "win32") assert.equal(await pwd(sessionCwd), sessionCwd);
-branchEntries = entries;
-await changeDir2.execute("t7", { path: sessionCwd }, undefined, undefined, ctx);
-event = { toolName: "bash", input: { command: "ls" } };
-await emit(ext2, "tool_call", event);
-assert.equal(event.input.command, "ls");
-assert.equal(statuses.get("cwd"), undefined);
-if (process.platform !== "win32") {
-  assert.equal(await pwd(sessionCwd), sessionCwd);
-  const reloadLoader = createLoader();
-  const extReload = await loadExtension(reloadLoader);
-  await extReload.tools.get("change_dir")!.definition.execute("reload-set", { path: worktree }, undefined, undefined, ctx);
-  assert.equal(await pwd(sessionCwd), worktree);
-  const patchedSpawn = spawn;
-  const extReloaded = await loadExtension(reloadLoader);
-  assert.equal(spawn, patchedSpawn);
-  assert.equal(await pwd(sessionCwd), sessionCwd);
-  await extReloaded.tools.get("change_dir")!.definition.execute("reload-reset", { path: sessionCwd }, undefined, undefined, ctx);
-  assert.equal(await pwd(sessionCwd), sessionCwd);
-}
-
-// The session directory is also the effective cwd after an explicit reset.
-rmSync(sessionCwd, { recursive: true, force: true });
-await assert.rejects(() => routedWrite("result.txt"), /Working directory unavailable/);
-assert.equal(existsSync(sessionCwd), false);
-await changeDir2.execute("missing-session-recover", { path: worktree }, undefined, undefined, ctx);
-await routedWrite("recovered.txt");
-assert.equal(readFileSync(join(worktree, "recovered.txt"), "utf8"), "kept\n");
-await emit(ext2, "session_shutdown", {});
-
-rmSync(spacedSessionCwd, { recursive: true, force: true });
-rmSync(worktree, { recursive: true, force: true });
-rmSync(alternateWorktree, { recursive: true, force: true });
-rmSync(inaccessible, { recursive: true, force: true });
-rmSync(restoredThenChanged, { recursive: true, force: true });
-rmSync(unavailableThenRestored, { recursive: true, force: true });
-rmSync(agentDir, { recursive: true, force: true });
-if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-console.log("ok");

@@ -1,33 +1,15 @@
 # pi-change-working-dir
 
-Let Pi agents change their working directory mid-session — no quitting, no `cd` prefix on every command. Built for git worktrees and monorepos.
-
-Pi's session cwd stays tied to the directory where the session started. This extension keeps a **virtual cwd** and routes tool calls there:
-
-| Surface | Behavior |
-|---|---|
-| `bash` | Routes native Bash before directory checks; existing custom Bash tools keep their executor and receive a `cd <dir> \|\| exit 1` prefix |
-| `read` / `write` / `edit` | Relative paths resolve against the virtual cwd |
-| `ls` / `grep` / `find` | Relative + defaulted paths resolve against the virtual cwd |
-| `ffgrep` / `fffind` | Path constraints follow the virtual cwd; see the search limitations below |
-| `apply_edits` | `path` and `files[].path` resolve against the virtual cwd |
-| `subagent` (pi-subagents) | Omitted or relative top-level `cwd` resolves against the virtual cwd |
-| `!cmd` user bash | Runs in the virtual cwd |
-| `pi.exec` / `spawn` | On Node-hosted Pi, session cwd or omitted cwd is rewritten to the virtual cwd |
-| System prompt | Rewrites the active cwd so the model isn't misled by the baked-in one |
-| Footer | Shows `cwd: <dir>` while an override is active |
-
-The directory is validated, canonicalized, and persisted on each session branch, so it survives `/resume`, `/fork`, `/reload`, and `/tree` navigation. Directory names containing control characters are rejected before they can reach tool inputs.
-
-## Requirements
-
-Pi 0.84.0 or later. Native CLI Bash continues working after the original session directory is removed, provided the selected directory still exists. Shell settings are captured from the original session's user/project configuration and refreshed on `/reload`.
+Change the directory for subsequent work without restarting Pi. Built for git worktrees and monorepos, with branch-specific restoration and a small model-facing tool.
 
 ## Usage
 
-**Agent:** calls the `change_dir` tool (`{ path: "../worktrees/feature-x" }`). Direct sibling tools then run in source order. Do not put `change_dir` in an explicit parallel batch.
+- **Agent:** `change_dir({ path: "../worktrees/feature-x" })`, then relative paths and ordinary shell commands.
+- **User:** `/cwd <path>` changes directory, `/cwd` shows it, and `/cwd -` returns to this run's original directory.
 
-**User:** `/cwd <path>` to change, `/cwd` to show, `/cwd -` to reset to the session's original directory.
+Absolute paths, `~`, and relative paths are supported. Targets must be accessible directories; symlinks are canonicalized and control-character names are rejected. Direct sibling tools run in source order. Do not place `change_dir` inside an explicit parallel wrapper.
+
+Directory changes affect execution. Project settings, trust, AGENTS.md, skills, loaded extensions, session identity, and session storage remain attached to the original project. Use Pi's session/project controls when you intend to change those resources too.
 
 ## Install
 
@@ -36,48 +18,96 @@ Pi 0.84.0 or later. Native CLI Bash continues working after the original session
 { "packages": ["git:github.com/fitchmultz/pi-change-working-dir"] }
 ```
 
-Or for local development: `pi -e ./index.ts`
+Requires official Pi 0.87.0 or a compatible fork. Development and CI cover both official Pi and `fitchmultz/pi`.
 
-Restart Pi after updating extension code; `/reload` reinitializes the already loaded code.
+```sh
+pi update --extension git:github.com/fitchmultz/pi-change-working-dir --approve
+```
 
-## Limitations
+Restart Pi after updating extension code. For local development: `pi -e ./index.ts`.
 
-- Custom tools other than `apply_edits`, `ffgrep`, `fffind`, and pi-subagents' `subagent` still receive Pi's original session cwd in their tool context. On Node-hosted Pi, `pi.exec` and other `child_process.spawn` calls that omit `cwd` or pass the session directory follow the virtual cwd. Explicit spawn `cwd` values other than the session directory are left alone. Bun-hosted Pi keeps its original ESM `spawn` binding, so `pi.exec` stays on the session directory there. `exec`, `execFile`, `spawnSync`, and `Bun.spawn` are not patched.
-- FFF has unresolved search-scoping and result-path bugs after directory changes. Directory constraints can include files outside the virtual cwd, and searches across index roots can return paths that resolve to a different file in subsequent tools. Use the built-in search tools when reliable scoping is required. `/reload` clears FFF's auxiliary index cache but does not fix these bugs. FFF's interactive `@file` autocomplete also remains indexed from the original session cwd.
-- FFF's query grammar cannot safely represent path constraints containing whitespace or a leading `!`; those calls are blocked with guidance to start Pi at the intended search root or use the built-in search tools. File-scoped `ffgrep` fuzzy fallbacks that would broaden beyond the requested file are also blocked. FFF treats whitespace and commas as separators inside every `exclude` value, including array items.
-- Only the default `ffgrep` and `fffind` names receive FFF-specific scoping and result rebasing. `PI_FFF_MODE=override` and `multi_grep` are not supported.
-- Explicit parallel wrappers can still race `change_dir`; Pi's native sibling calls are serialized because the tool declares sequential execution.
-- Pi runs `tool_call` handlers in extension load order. Load this extension before path-policy extensions so they inspect rewritten paths. This extension is not a sandbox.
-- On released Pi, `user_bash` is first-handler-wins. While a virtual cwd is active, this extension supplies a local executor using the configured `shellPath`. Put sandbox or remote-shell handlers before it to retain their executors; their cwd handling remains their responsibility. Existing custom Bash tools are also left intact and may still require the original directory. When Pi provides its optional native cwd hook, it is used instead.
-- The native Bash fallback reads CLI file settings, respecting project trust. SDK-only shell settings and base-executor overrides are outside this fallback's scope.
-- `/cwd` feedback uses Pi UI notifications; in print/JSON mode use the model-callable `change_dir` tool instead.
-- An unavailable saved directory falls back to the session cwd without deleting the saved branch state; a later reload can restore it after the path returns.
-- If the effective working directory is deleted or loses access, the listed file/search tools, `apply_edits`, and `subagent` are blocked until it is restored or an accessible directory is selected with `change_dir` or `/cwd`. This applies to absolute paths too: alternate spellings and host-specific normalization must not recreate a removed worktree.
-- The footer `pwd` segment still shows the immutable session cwd; the `cwd:` status segment shows the override.
-- Project trust, `.pi/extensions`, AGENTS.md, skill discovery, and other project-scoped extension state remain bound to the original session cwd.
-- Windows is not currently tested.
+## Execution coverage
 
-## Native checkpoints
+| Surface | Directory behavior |
+|---|---|
+| Default `read`, `write`, `edit`, `ls`, `grep`, `find` | Relative/default paths use the selected directory. Absolute targets remain explicit. |
+| Default `bash`, `powershell` | Native shell execution uses the invocation's captured directory. |
+| Cooperating editor, browser, and subagent extensions | Query the public interface below and capture their operation directory once. |
+| User `!` / `!!` shell | Uses the fork's native Bash hook where available; otherwise a local native-executor fallback. |
+| Model context | Structured directory updates preserve earlier messages and tool definitions. |
+| Footer | The `cwd:` status shows the override; Pi's project segment retains its original meaning. |
 
-On Pi forks with `session_checkpoint`, the extension qualifies its existing branch-backed cwd only when cold restoration would select the same directory. Native dispatch already owns pending commands/tools/Bash; shutdown still detaches the spawn holder. No second cwd store is created. Retained FFF cursor routes block sleep because their memory is not restored; an unused FFF integration does not block or get disabled. Older Pi hosts ignore the additive hook.
+Default-tool adapters preserve native schemas, renderers, cancellation, truncation, and file queues. Speculative edit previews wait until the target is admitted. Already-running calls retain their captured directory if another call changes the selection.
 
-## Test
+Custom tools, custom definitions under built-in names, and remote/sandbox executors are not replaced. They must integrate explicitly if they should follow directory changes. The extension does not patch `process.cwd()`, `child_process`, or `pi.exec`. An explicit subprocess directory always remains explicit.
 
-```bash
+### Policy and shell composition
+
+Load this extension before path-policy extensions. Default native tool paths are bound in `tool_call`, so later policy handlers inspect the actual absolute targets. Cooperating tools can bind their own paths in `prepareArguments`, before all policy handlers. This extension is not a sandbox.
+
+On official Pi, `user_bash` is first-handler-wins. An earlier custom handler retains its executor and owns its directory handling. On hook-capable forks, native Bash routing also supplies the selected directory to custom user-Bash operations. Explicit parallel wrappers and independent custom backends retain their own scheduling contracts.
+
+Default adapters read the original project's CLI file settings, respecting project trust, and refresh them on reload. SDK-only in-memory shell/image settings and custom base executors are outside these file-setting adapters. A direct official SDK `session.executeBash()` call bypasses extension `user_bash`; SDK hosts should pass their own directory-aware operations or invoke the registered tool.
+
+## Extension integration
+
+The active owner answers synchronous requests on Pi's public event bus. It remains the only owner of directory selection and restoration; consumers must not read its private journal entries.
+
+### Resolve an operation directory
+
+Channel: `pi-change-working-dir:resolve-execution-cwd`
+
+```ts
+type DirectoryRequest = {
+  sessionManager: ExtensionContext["sessionManager"];
+  result?: { cwd: string; error?: string };
+};
+
+const request: DirectoryRequest = { sessionManager: ctx.sessionManager };
+pi.events.emit("pi-change-working-dir:resolve-execution-cwd", request);
+```
+
+- A reply identifies the canonical absolute execution directory. Propagate `error`; never replace an error with a fallback directory.
+- With no active directory owner, use `ctx.cwd`.
+- With an identifiable older `pi-change-working-dir` installation but no reply, require an update and restart. Use public tool **and command** `sourceInfo` plus package provenance; excluding `change_dir` does not remove `/cwd`. An unrelated tool with the same name is not this owner.
+- Resolve once before policy, queuing, or other awaited preparation. Preserve that value through execution. Preserve explicit operation directories and saved child/retry targets.
+- Keep project/configuration, browser identity, recordings already in progress, and session-owned storage on their appropriate original roots.
+
+The owner initializes through session lifecycle events, normal `before_agent_start`, and its own tool/command entrypoints. Bare SDK `createAgentSession()` followed by `prompt()` is supported. Concurrent sessions require separate native resource-loader/runtime instances.
+
+### Initialize an explicit child directory
+
+Channel: `pi-change-working-dir:set-execution-cwd`. Add `path: string` to the same request shape. The owner uses the same validation and branch persistence as `change_dir` and returns the same result shape.
+
+Use this after owner initialization and before the first operation of a **new** context-forked child whose explicit launch directory must override inherited parent selection. The change belongs to the child's branch. Do not repeat it on continuation or erase a child's later directory choices. Initialization failure must stop wrong-directory work.
+
+The interface is available starting with **0.5.0**. Update cooperating editor, browser, and subagent packages together, then restart Pi. Older consumers do not automatically inherit the selected directory, and a newer consumer with an older active owner is not a supported pair.
+
+## Restoration and unavailable paths
+
+The selected directory is stored on the session branch and survives resume, fork, reload, tree navigation, and compaction. Supported fork context windows preserve it too. `/cwd -` resets to the current run's original directory, including an explicit `--session-cwd` override.
+
+An unavailable **saved** directory falls back to the original directory without deleting the saved selection. The model and UI receive the fallback notice. A later reload can restore the selection when the path returns.
+
+If the **live** selected directory disappears or loses access, covered operations fail until it is restored or another accessible directory is selected. Absolute file targets do not silently bypass this recovery requirement. Validation does not promise an operating-system sandbox or atomic protection against external filesystem changes.
+
+On forks with native checkpoints, the extension certifies its branch state only when cold restoration would select the same effective directory. No second execution-directory store is created.
+
+## Model behavior
+
+`change_dir` is an ordinary strict-schema, sequential tool. It does not require Astra-only APIs, asynchronous tool jobs, or tool discovery. Structured context updates preserve prompt prefixes on models/providers supporting mid-conversation system messages. Provider configuration and other extensions' whole-prompt overrides can affect caching; this package does not change them or promise a particular cache hit rate.
+
+## Verification
+
+```sh
 npm ci --ignore-scripts
 npm run check:compat
 ```
 
-`check:compat` runs typechecking, the existing behavior suite, pack dry-run, and the
-native Bash regression against the installed Pi development cohort (official
-0.87.0 by default). The regression reports whether the official fallback or the
-optional native cwd hook is in use; `PI_COMPAT_HOST=fork` requires the native hook.
-The two paths intentionally retain different first-handler behavior for custom
-user Bash operations.
+The checks exercise real Pi loading, directory restoration, policy-await snapshots, subprocess isolation, native edit rendering, structured prompt boundaries, and native Bash settings/output/cancellation. They use deterministic provider fixtures and do not send model requests.
 
-Run just the native Bash regression against the installed dependency, or select a published Pi package or local build:
-
-```bash
-npm run test:bash
-PI_PACKAGE_DIR=/absolute/path/to/pi/packages/coding-agent npm run test:bash
+```sh
+PI_PACKAGE_DIR=/absolute/path/to/pi-coding-agent npm run check:compat
 ```
+
+The compatibility matrix covers the latest qualified official/fork cohort on macOS and Linux. Windows is not currently qualified.
