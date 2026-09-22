@@ -70,7 +70,7 @@ npm run check:compat
 
 `check:compat` runs typechecking, the existing behavior suite, pack dry-run, and the
 native Bash regression against the installed Pi development cohort (official
-0.86.1 by default). The regression reports whether the official fallback or the
+0.87.0 by default). The regression reports whether the official fallback or the
 optional native cwd hook is in use; `PI_COMPAT_HOST=fork` requires the native hook.
 The two paths intentionally retain different first-handler behavior for custom
 user Bash operations.
