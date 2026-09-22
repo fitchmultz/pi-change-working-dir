@@ -94,6 +94,31 @@ try {
     assert.equal(text(await execute("read", { path: requested })), "FALLBACK");
     if (process.platform !== "win32") await assert.rejects(() => execute("read", { path: `absent/../${requested}` }));
   }
+  for (const [stored, requested] of [
+    ["d\u2019ecran", "d'ecran"], ["parent at 10.00.00\u202fAM.dir", "parent at 10.00.00 AM.dir"],
+    ["caf\u00e9-parent".normalize("NFD"), "caf\u00e9-parent"],
+    ["l\u2019\u00e9cran".normalize("NFD"), "l'\u00e9cran"],
+  ]) {
+    mkdirSync(join(root, stored!));
+    writeFileSync(join(root, stored!, "note.txt"), "PARENT_FALLBACK");
+    assert.equal(text(await execute("read", { path: `${requested}${sep}note.txt` })), "PARENT_FALLBACK");
+    if (process.platform !== "win32") {
+      mkdirSync(join(root, stored!, "physical/nested"), { recursive: true });
+      symlinkSync("physical/nested", join(root, stored!, "alias"));
+      writeFileSync(join(root, stored!, "physical/note.txt"), "PHYSICAL_FALLBACK");
+      assert.equal(text(await execute("read", { path: `${requested}/alias/../note.txt` })), "PHYSICAL_FALLBACK");
+      await assert.rejects(() => execute("read", { path: `${requested}/absent/../note.txt` }));
+      await assert.rejects(() => execute("read", { path: `${requested}/note.txt/../note.txt` }));
+    }
+    // A normalizing filesystem may already consider NFC and NFD the same exact path.
+    if (!existsSync(`${root}${sep}${requested}${sep}note.txt`)) {
+      await assert.rejects(() => execute("edit", { path: `${requested}${sep}note.txt`,
+        edits: [{ oldText: "PARENT_FALLBACK", newText: "BAD" }] }));
+      await execute("write", { path: `${requested}${sep}note.txt`, content: "EXACT_WRITE" });
+      assert.equal(readFileSync(join(root, requested!, "note.txt"), "utf8"), "EXACT_WRITE");
+      assert.equal(readFileSync(join(root, stored!, "note.txt"), "utf8"), "PARENT_FALLBACK");
+    }
+  }
   const hugeName = "huge '$ literal.txt";
   writeFileSync(join(root, hugeName), "X".repeat(60_000));
   const hint = text(await execute("read", { path: hugeName }));

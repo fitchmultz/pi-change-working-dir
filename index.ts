@@ -83,6 +83,20 @@ const operationPath = (path: string, cwd: string): string => {
 const bindPath = (path: unknown, cwd: string): unknown =>
   typeof path === "string" && path ? operationPath(path.startsWith("@") ? path.slice(1) : path, cwd) : path;
 
+// The hosts' read-path helper is private. Preserve its ordered full-path variants,
+// validating each with native traversal before canonicalization.
+async function readTarget(path: string): Promise<string> {
+  const nfd = path.normalize("NFD");
+  const variants = new Set([path, path.replace(/ (AM|PM)\./gi, "\u202f$1."),
+    nfd, path.replace(/'/g, "\u2019"), nfd.replace(/'/g, "\u2019")]);
+  let failure: unknown;
+  for (const candidate of variants) {
+    try { await stat(candidate); } catch (error) { failure ??= error; continue; }
+    return realpath(candidate);
+  }
+  throw failure;
+}
+
 // Official Pi has no target resolver export. Keep its default publisher, but validate
 // each native parent/link before handing a canonical file URL to either host.
 function fileTarget(path: string): string {
@@ -275,13 +289,11 @@ export default function (pi: ExtensionAPI & {
               writeFile: publish,
             } });
         } else if (path) {
-          try {
+          if (definition.name === "read") {
+            showTarget(await readTarget(path));
+          } else {
             await stat(path);
             showTarget(await realpath(path));
-          } catch (error) {
-            if (definition.name !== "read" || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-            // A valid parent lets native read try its screenshot/quote/Unicode fallbacks.
-            showTarget(fileTarget(path));
           }
           delegatedPath = pathToFileURL(target!).href;
         }
