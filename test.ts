@@ -67,6 +67,13 @@ const entries = (session: Session) => session.sessionManager.getBranch().filter(
 
 try {
   const { session, api } = await setup();
+  const checkpointBlockers = async () => {
+    const runner = session.extensionRunner! as typeof session.extensionRunner & {
+      prepareCheckpoint(event: { type: "session_checkpoint"; boundary: "settled"; signal: AbortSignal; invalidate(): void }): Promise<string[]>;
+    };
+    assert.equal(typeof runner.prepareCheckpoint, "function");
+    return runner.prepareCheckpoint({ type: "session_checkpoint", boundary: "settled", signal: new AbortController().signal, invalidate() {} });
+  };
   assert.equal(session.getToolDefinition("change_dir")!.executionMode, "sequential");
   assert.deepEqual(session.getToolDefinition("change_dir")!.constrainedSampling, { type: "json_schema", strict: "prefer" });
   assert.equal(query(api, session)?.cwd, origin);
@@ -78,6 +85,7 @@ try {
   symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
   await execute(session, "change_dir", { path: link });
   assert.equal(query(api, session)?.cwd, target);
+  if (process.env.PI_COMPAT_HOST === "fork") assert.deepEqual(await checkpointBlockers(), []);
   assert.equal(session.sessionManager.getCwd(), origin);
   const count = entries(session).length;
   await execute(session, "change_dir", { path: target });
@@ -167,6 +175,9 @@ try {
   const removed = join(root, "removed"); mkdirSync(removed);
   await execute(session, "change_dir", { path: removed });
   rmSync(removed, { recursive: true });
+  if (process.env.PI_COMPAT_HOST === "fork") {
+    assert.ok((await checkpointBlockers()).some((reason) => reason.includes("Working directory differs from the selected branch restore")));
+  }
   await assert.rejects(() => execute(session, "write", { path: "new.txt", content: "no" }), /Working directory unavailable/);
   await assert.rejects(() => execute(session, "write", { path: join(other, "blocked.txt"), content: "no" }), /Working directory unavailable/);
   assert.ok(!existsSync(removed)); assert.ok(!existsSync(join(other, "blocked.txt")));

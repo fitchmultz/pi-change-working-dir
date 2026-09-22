@@ -112,4 +112,4 @@ The checks exercise real Pi loading, native path traversal and Unicode targets, 
 PI_PACKAGE_DIR=/absolute/path/to/pi-coding-agent npm run check:compat
 ```
 
-The compatibility matrix covers the latest qualified official/fork cohort on macOS and Linux. A focused Windows job compares path behavior with actual native filesystem calls; the full extension is not currently qualified on Windows.
+CI runs official Pi on Linux and macOS and the maintained fork on macOS, with a packed-install check and a fork checkpoint check. Native Windows filesystem comparisons have been verified separately; Windows is not part of CI or full-extension qualification.
