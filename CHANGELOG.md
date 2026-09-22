@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.2 - 2026-09-22
+
+- Preserve native filesystem traversal and exact Unicode filenames across default file/search tools, `change_dir`, and `/cwd` on official Pi and the fork.
+- Keep admission and previews non-mutating, reject invalid traversal without changing file contents, and retain captured invocation paths in execution and replay.
+- Preserve native mutation ordering, read filename fallbacks, path labels, and executable oversized-read hints.
+- Add native path regressions, including native Windows filesystem comparisons.
+- Qualify against official Pi 0.87.1 and compatible forks.
+
 ## 0.5.1 - 2026-09-22
 
 - Correct the native settlement compatibility fixture to inspect the low-level agent signal. The 0.5.0 runtime behavior is unchanged.

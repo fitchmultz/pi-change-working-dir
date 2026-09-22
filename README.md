@@ -18,7 +18,7 @@ Directory changes affect execution. Project settings, trust, AGENTS.md, skills, 
 { "packages": ["git:github.com/fitchmultz/pi-change-working-dir"] }
 ```
 
-Requires official Pi 0.87.0 or a compatible fork. Development and CI cover both official Pi and `fitchmultz/pi`.
+Requires official Pi 0.87.0 or a compatible fork. Development and CI cover official Pi 0.87.1 and `fitchmultz/pi`.
 
 ```sh
 pi update --extension git:github.com/fitchmultz/pi-change-working-dir --approve
@@ -39,11 +39,13 @@ Restart Pi after updating extension code. For local development: `pi -e ./index.
 
 Default-tool adapters preserve native schemas, renderers, cancellation, truncation, and file queues. Speculative edit previews wait until the target is admitted. Already-running calls retain their captured directory if another call changes the selection.
 
+Paths follow native filesystem traversal, including symlinks, `..`, trailing separators, and exact Unicode names. Native read filename fallbacks remain available. Admission and previews never create directories. Mutation validation and write-parent creation run inside Pi's existing file queue, so queued edits can follow queued file creation. The adapters retain each host's native publisher.
+
 Custom tools, custom definitions under built-in names, and remote/sandbox executors are not replaced. They must integrate explicitly if they should follow directory changes. The extension does not patch `process.cwd()`, `child_process`, or `pi.exec`. An explicit subprocess directory always remains explicit.
 
 ### Policy and shell composition
 
-Load this extension before path-policy extensions. Default native tool paths are bound in `tool_call`, so later policy handlers inspect the actual absolute targets. Cooperating tools can bind their own paths in `prepareArguments`, before all policy handlers. This extension is not a sandbox.
+Load this extension before path-policy extensions. Default native tool paths are bound in `tool_call`, so later policy handlers inspect absolute addressed paths. POSIX traversal components remain intact; policies must not lexically collapse symlink traversal when identifying a target. Cooperating tools can bind their own paths in `prepareArguments`, before all policy handlers. This extension is not a sandbox.
 
 On official Pi, `user_bash` is first-handler-wins. An earlier custom handler retains its executor and owns its directory handling. On hook-capable forks, native Bash routing also supplies the selected directory to custom user-Bash operations. Explicit parallel wrappers and independent custom backends retain their own scheduling contracts.
 
@@ -104,10 +106,10 @@ npm ci --ignore-scripts
 npm run check:compat
 ```
 
-The checks exercise real Pi loading, directory restoration, policy-await snapshots, subprocess isolation, native edit rendering, structured prompt boundaries, and native Bash settings/output/cancellation. They use deterministic provider fixtures and do not send model requests.
+The checks exercise real Pi loading, native path traversal and Unicode targets, non-mutating admission/previews, directory restoration, policy-await snapshots, subprocess isolation, native edit rendering, structured prompt boundaries, and native Bash settings/output/cancellation. They use deterministic provider fixtures and do not send model requests.
 
 ```sh
 PI_PACKAGE_DIR=/absolute/path/to/pi-coding-agent npm run check:compat
 ```
 
-CI runs official Pi on Linux and macOS and the maintained fork on macOS, with a packed-install check and a fork checkpoint check. Windows is not currently qualified.
+CI runs official Pi on Linux and macOS and the maintained fork on macOS, with a packed-install check and a fork checkpoint check. Native Windows filesystem comparisons have been verified separately; Windows is not part of CI or full-extension qualification.

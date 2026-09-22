@@ -13,10 +13,12 @@ import {
   type ExtensionContext,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { accessSync, constants, realpathSync, statSync } from "node:fs";
+import * as host from "@earendil-works/pi-coding-agent";
+import { accessSync, constants, lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { access, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Type } from "typebox";
 import { registerCwdContext } from "./cwd-context.ts";
 
@@ -25,13 +27,14 @@ const RESOLVE_CWD = "pi-change-working-dir:resolve-execution-cwd";
 const SET_CWD = "pi-change-working-dir:set-execution-cwd";
 const DEFAULT_PATH_TOOLS = new Set(["ls", "grep", "find"]);
 const PATH_TOOLS = new Set(["read", "write", "edit", ...DEFAULT_PATH_TOOLS]);
+const UNICODE_SPACES = /[\u00a0\u2000-\u200a\u202f\u205f\u3000]/g;
 
 type DirectoryRequest = {
   sessionManager: ExtensionContext["sessionManager"];
   path?: unknown;
   result?: { cwd: string; error?: string };
 };
-type Invocation = { cwd: string };
+type Invocation = { cwd: string; readFallback?: { bound: string; spaced: string } };
 type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2];
 
 const expandTilde = (path: string): string =>
@@ -50,8 +53,8 @@ const escapeControl = (path: string): string =>
 
 const accessibleDirectory = (path: string): string | undefined => {
   try {
-    const target = realpathSync(path);
-    if (!statSync(target).isDirectory()) return;
+    if (!statSync(path).isDirectory()) return;
+    const target = realpathSync.native(path);
     accessSync(target, constants.X_OK);
     return target;
   } catch {
@@ -68,16 +71,85 @@ const assertAvailable = (cwd: string): void => {
   }
 };
 
-const bindPath = (path: unknown, cwd: string): unknown => {
-  if (typeof path !== "string" || !path) return path;
-  const raw = path.startsWith("@") ? path.slice(1) : path;
-  return resolve(cwd, raw.startsWith("file://") ? fileURLToPath(raw) : expandTilde(raw));
+const operationPath = (path: string, cwd: string): string => {
+  const expanded = path.startsWith("file://") ? fileURLToPath(path) : expandTilde(path);
+  // DOS paths normalize before lookup; POSIX traversal must reach the filesystem intact.
+  if (sep === "\\" && !/^\\\\[?.]\\/.test(expanded)) {
+    const target = resolve(cwd, expanded);
+    return /[\\/]$/.test(expanded) && !target.endsWith(sep) ? target + sep : target;
+  }
+  return isAbsolute(expanded) ? expanded : `${cwd}${sep}${expanded}`;
 };
 
-const nativePath = (path: string, cwd: string): string => {
-  const scoped = relative(cwd, path);
-  return isAbsolute(scoped) ? scoped : scoped ? `.${sep}${scoped}` : ".";
-};
+const bindPath = (path: unknown, cwd: string): unknown =>
+  typeof path === "string" && path ? operationPath(path.startsWith("@") ? path.slice(1) : path, cwd) : path;
+
+// The hosts' read-path helper is private. Preserve its ordered full-path variants,
+// validating each with native traversal before canonicalization.
+async function readTarget(path: string, spaced = path.replace(UNICODE_SPACES, " ")): Promise<string> {
+  const nfd = spaced.normalize("NFD");
+  const variants = new Set([path, spaced, spaced.replace(/ (AM|PM)\./gi, "\u202f$1."),
+    nfd, spaced.replace(/'/g, "\u2019"), nfd.replace(/'/g, "\u2019")]);
+  let failure: unknown;
+  for (const candidate of variants) {
+    try { await stat(candidate); } catch (error) { failure ??= error; continue; }
+    return realpath(candidate);
+  }
+  throw failure;
+}
+
+// Official Pi has no target resolver export. Keep its default publisher, but validate
+// each native parent/link before handing a canonical file URL to either host.
+function fileTarget(path: string): string {
+  const links = new Set<string>();
+  for (;;) {
+    if (path.endsWith(sep) || path.endsWith("/")) {
+      statSync(path);
+      return realpathSync.native(path);
+    }
+    const parentPath = dirname(path);
+    if (!statSync(parentPath).isDirectory()) {
+      throw Object.assign(new Error(`Not a directory: ${parentPath}`), { code: "ENOTDIR" });
+    }
+    const parent = realpathSync.native(parentPath);
+    const target = join(parent, basename(path));
+    let info;
+    try { info = lstatSync(target); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return target;
+    }
+    if (!info.isSymbolicLink()) return realpathSync.native(target);
+    if (links.has(target)) throw Object.assign(new Error(`Symlink cycle: ${target}`), { code: "ELOOP" });
+    links.add(target);
+    const link = readlinkSync(target);
+    path = isAbsolute(link) ? link : `${parent}${sep}${link}`;
+  }
+}
+
+// Discover queue identity without awaiting, creating parents, or admitting invalid I/O.
+// Revisit symlinks after resolving absent components such as missing/../link.
+function queueTarget(path: string, links = new Set<string>()): string {
+  try { return realpathSync.native(path); } catch { /* Resolve prospective parents below. */ }
+  const parentPath = dirname(path);
+  if (parentPath === path) return path;
+  const parent = queueTarget(parentPath, links);
+  const target = join(parent, basename(path));
+  try {
+    if (lstatSync(target).isSymbolicLink()) {
+      if (links.has(target)) return target;
+      links.add(target);
+      const link = readlinkSync(target);
+      return queueTarget(isAbsolute(link) ? link : `${parent}${sep}${link}`, links);
+    }
+    return realpathSync.native(target);
+  } catch { return target; }
+}
+
+// Reuse each host's publisher: the fork exports its atomic publisher; official Pi
+// uses writeFile. The optional export is never required from official installations.
+const publishFile = (host as typeof host & {
+  publishLocalFile?: (path: string, content: string, signal?: AbortSignal) => Promise<void>;
+}).publishLocalFile;
 
 export default function (pi: ExtensionAPI & {
   registerBashCwdHook?: (hook: (cwd: string) => string) => void;
@@ -132,7 +204,7 @@ export default function (pi: ExtensionAPI & {
   const change = (path: unknown, ctx: ExtensionContext): string => {
     initialize(ctx);
     if (typeof path !== "string" || !path) throw new Error("Path is required");
-    const requested = resolve(current(ctx), expandTilde(path));
+    const requested = operationPath(path, current(ctx));
     const target = accessibleDirectory(requested);
     if (!target) throw new Error(`Not an accessible directory: ${escapeControl(requested)}`);
     if (escapeControl(target) !== target) {
@@ -156,11 +228,15 @@ export default function (pi: ExtensionAPI & {
 
   const bindInvocation = (name: string, input: Record<string, unknown>, cwd: string) => {
     assertAvailable(cwd);
+    const rawPath = input.path;
     if (PATH_TOOLS.has(name)) {
       input.path = DEFAULT_PATH_TOOLS.has(name) && (input.path === undefined || input.path === "")
         ? cwd : bindPath(input.path, cwd);
     }
-    invocations.set(input, { cwd });
+    // Normalize the requested spelling, never Unicode spaces in a captured cwd.
+    const readFallback = name === "read" && typeof rawPath === "string" && typeof input.path === "string"
+      ? { bound: input.path, spaced: bindPath(rawPath.replace(UNICODE_SPACES, " "), cwd) as string } : undefined;
+    invocations.set(input, { cwd, readFallback });
   };
 
   const wrap = (definition: ToolDefinition<any, any, any>): ToolDefinition<any, any, any> => ({
@@ -170,23 +246,85 @@ export default function (pi: ExtensionAPI & {
       const params = value as Record<string, unknown>;
       initialize(ctx);
       if (!invocations.has(params)) bindInvocation(definition.name, params, current(ctx));
-      const { cwd } = invocations.get(params)!;
+      const { cwd, readFallback } = invocations.get(params)!;
       assertAvailable(cwd);
       const path = PATH_TOOLS.has(definition.name) && typeof params.path === "string" ? params.path : undefined;
-      const rendering = renderCalls.get(id);
-      if (rendering) {
-        rendering.state.workingDirectory = cwd;
-        rendering.state.workingPath = path;
-        rendering.invalidate();
-      }
-      // Keep the captured root out of the native tool's input-path normalization.
-      const input = path ? { ...params, path: nativePath(path, cwd) } : params;
-      const executionContext = Object.create(ctx, { cwd: { value: cwd, enumerable: true } }) as ExtensionContext;
       try {
-        const result = await definition.execute(id, input, signal, onUpdate, executionContext);
+        signal?.throwIfAborted();
+        let target: string | undefined;
+        let delegate = definition;
+        let delegatedPath: string | undefined;
+        const showTarget = (value?: string) => {
+          target = value;
+          const rendering = renderCalls.get(id);
+          if (rendering) {
+            rendering.state.workingDirectory = cwd;
+            rendering.state.workingTarget = value;
+            rendering.invalidate();
+          }
+        };
+        const mutation = definition.name === "write" || definition.name === "edit";
+        if (!path) showTarget();
+        if (path && mutation) {
+          // Factory execution registers its queue before any asynchronous preparation.
+          delegatedPath = pathToFileURL(queueTarget(path)).href;
+          if (definition.name === "edit") {
+            try { statSync(path); showTarget(fileTarget(path)); } catch { /* Missing previews wait for queued validation. */ }
+          }
+          const publish = async (_path: string, content: string) => {
+            signal?.throwIfAborted();
+            const publishedTarget = fileTarget(path);
+            showTarget(publishedTarget);
+            if (publishFile) await publishFile(publishedTarget, content, signal);
+            else await writeFile(publishedTarget, content, "utf8");
+          };
+          delegate = definition.name === "write"
+            ? createWriteToolDefinition(cwd, { operations: {
+              mkdir: async () => { await mkdir(dirname(path), { recursive: true }); },
+              writeFile: publish,
+            } })
+            : createEditToolDefinition(cwd, { operations: {
+              access: async () => {
+                await access(path, constants.R_OK | constants.W_OK);
+                await stat(path);
+                signal?.throwIfAborted();
+                showTarget(await realpath(path));
+              },
+              readFile: async () => readFile(path),
+              writeFile: publish,
+            } });
+        } else if (path) {
+          if (definition.name === "read") {
+            showTarget(await readTarget(path, readFallback?.bound === path ? readFallback.spaced : undefined));
+          } else {
+            await stat(path);
+            showTarget(await realpath(path));
+          }
+          delegatedPath = pathToFileURL(target!).href;
+        }
+        signal?.throwIfAborted();
+        // File URLs bypass host Unicode-space rewriting as well as lexical traversal.
+        const input = delegatedPath ? { ...params, path: delegatedPath } : params;
+        const executionContext = Object.create(ctx, { cwd: { value: cwd, enumerable: true } }) as ExtensionContext;
+        const result = await delegate.execute(id, input, signal, onUpdate, executionContext).catch((error: unknown) => {
+          if (error instanceof Error && delegatedPath && path) {
+            error.message = error.message.replaceAll(delegatedPath, () => target ?? path);
+          }
+          throw error;
+        });
+        // Only generated summaries/hints contain delegated URLs; never rewrite file contents.
+        if (delegatedPath && target && (mutation || result.details?.truncation?.firstLineExceedsLimit)) {
+          const displayPath = mutation ? target : `'${target.replaceAll("'", "'\\''")}'`;
+          result.content = result.content.map((block) => block.type === "text"
+            ? { ...block, text: block.text.replaceAll(delegatedPath, () => displayPath) } : block);
+          const header = `--- ${delegatedPath}\n+++ ${delegatedPath}\n`;
+          if (typeof result.details?.patch === "string" && result.details.patch.startsWith(header)) {
+            result.details.patch = `--- ${target}\n+++ ${target}\n${result.details.patch.slice(header.length)}`;
+          }
+        }
         return {
           ...result,
-          details: { ...result.details, workingDirectory: cwd, ...(path ? { workingPath: path } : {}) },
+          details: { ...result.details, workingDirectory: cwd, ...(path ? { workingPath: path, workingTarget: target } : {}) },
         };
       } finally {
         renderCalls.delete(id);
@@ -195,11 +333,20 @@ export default function (pi: ExtensionAPI & {
     ...(definition.renderCall ? {
       renderCall(args, theme, ctx: RenderContext) {
         if (!ctx.state.workingDirectory) renderCalls.set(ctx.toolCallId, ctx);
-        const bound = ctx.state.workingPath && ctx.state.workingDirectory && args && typeof args === "object"
-          ? { ...args, path: nativePath(ctx.state.workingPath, ctx.state.workingDirectory) } : args;
+        // Native edit uses path for preview I/O and the legacy alias for its label.
+        const bound = ctx.state.workingTarget && args && typeof args === "object"
+          ? { ...args, path: definition.name === "edit" ? pathToFileURL(ctx.state.workingTarget).href : ctx.state.workingTarget,
+            file_path: ctx.state.workingTarget } : args;
         return definition.renderCall!(bound, theme, {
           ...ctx,
           cwd: ctx.state.workingDirectory ?? ctx.cwd,
+          invalidate() {
+            const preview = definition.name === "edit" && ctx.state.callComponent?.preview;
+            if (typeof preview?.error === "string" && ctx.state.workingTarget) {
+              preview.error = preview.error.replaceAll(pathToFileURL(ctx.state.workingTarget).href, () => ctx.state.workingTarget);
+            }
+            ctx.invalidate();
+          },
           // Argument completion precedes native preflight; don't preview the wrong file.
           argsComplete: ctx.argsComplete && Boolean(ctx.state.workingDirectory),
         });
@@ -207,17 +354,18 @@ export default function (pi: ExtensionAPI & {
     } : {}),
     ...(definition.renderResult ? {
       renderResult(result, options, theme, ctx: RenderContext) {
-        const details = result.details as { workingDirectory?: string; workingPath?: string } | undefined;
+        const details = result.details as { workingDirectory?: string; workingPath?: string; workingTarget?: string } | undefined;
         if (details?.workingDirectory) {
           ctx.state.workingDirectory = details.workingDirectory;
-          ctx.state.workingPath = details.workingPath;
+          ctx.state.workingTarget = details.workingTarget ?? details.workingPath;
         }
         renderCalls.delete(ctx.toolCallId);
         return definition.renderResult!(result, options, theme, {
           ...ctx,
           cwd: ctx.state.workingDirectory ?? ctx.cwd,
-          args: ctx.state.workingPath && ctx.state.workingDirectory && ctx.args && typeof ctx.args === "object"
-            ? { ...ctx.args, path: nativePath(ctx.state.workingPath, ctx.state.workingDirectory) } : ctx.args,
+          args: ctx.state.workingTarget && ctx.args && typeof ctx.args === "object"
+            ? { ...ctx.args, path: definition.name === "edit" ? pathToFileURL(ctx.state.workingTarget).href : ctx.state.workingTarget,
+              file_path: ctx.state.workingTarget } : ctx.args,
         });
       },
     } : {}),

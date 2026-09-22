@@ -1,8 +1,8 @@
 /** Native preview and replay stay on the admitted file. No terminal or provider required. */
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -20,6 +20,19 @@ for (const path of [a, b, agentDir]) mkdirSync(path);
 const beforeA = "A_ONLY_CONTEXT\nold text\nA_ONLY_TAIL\n";
 const beforeB = "B_ONLY_CONTEXT\nold text\nB_ONLY_TAIL\n";
 for (const [path, content] of [[a, beforeA], [b, beforeB]]) writeFileSync(join(path!, "same.txt"), content!);
+mkdirSync(join(b, "actual/nested"), { recursive: true });
+symlinkSync(join(b, "actual/nested"), join(b, "link"), process.platform === "win32" ? "junction" : "dir");
+const fileName = "same\u00a0$$$&$'$`.txt";
+const asciiName = fileName.replace("\u00a0", " ");
+const requested = `link${sep}..${sep}${fileName}`;
+const addressed = `${b}${sep}${requested}`;
+const physicalFile = join(realpathSync.native(`${b}${sep}link${sep}..`), fileName);
+mkdirSync(join(a, "link"));
+writeFileSync(join(a, asciiName), beforeA);
+writeFileSync(join(a, fileName), beforeA);
+writeFileSync(join(b, fileName), beforeA);
+writeFileSync(join(b, "actual", asciiName), beforeA);
+writeFileSync(physicalFile, beforeB);
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = agentDir;
 process.env.PI_OFFLINE = "1";
@@ -36,7 +49,7 @@ try {
   await session.getToolDefinition("change_dir")!.execute("cwd", { path: b }, undefined, undefined, ctx);
   const definition = session.getToolDefinition("edit")!;
   initTheme("dark");
-  const args = { path: "same.txt", edits: [{ oldText: "old text", newText: "new text" }] };
+  const args = { path: requested, edits: [{ oldText: "old text", newText: "new text" }] };
   const ui = { requestRender() {} };
   const component = new ToolExecutionComponent("edit", "edit-preview", args, {}, definition, ui, a);
   component.setArgsComplete();
@@ -47,28 +60,65 @@ try {
   let locked!: () => void;
   const ready = new Promise<void>(resolve => { locked = resolve; });
   const hold = new Promise<void>(resolve => { release = resolve; });
-  const lock = withFileMutationQueue(join(b, "same.txt"), async () => { locked(); await hold; });
+  const lock = withFileMutationQueue(physicalFile, async () => { locked(); await hold; });
   await ready;
   const input = structuredClone(args);
   await session.extensionRunner!.emitToolCall({ type: "tool_call", toolName: "edit", toolCallId: "edit-preview", input });
-  assert.equal(input.path, join(b, "same.txt"));
+  assert.equal(input.path, process.platform === "win32" ? join(b, requested) : addressed);
   component.markExecutionStarted();
   const executing = definition.execute("edit-preview", input, undefined, undefined, ctx);
   for (let attempt = 0; attempt < 200 && !render(component).includes("B_ONLY_CONTEXT"); attempt++) await delay(5);
   assert.match(render(component), /B_ONLY_CONTEXT/);
   assert.doesNotMatch(render(component), /A_ONLY_CONTEXT/);
+  assert.doesNotMatch(render(component), /file:\/\//, "render native path labels rather than delegated URLs");
   release();
   await lock;
   const result = await executing;
   assert.equal(readFileSync(join(a, "same.txt"), "utf8"), beforeA);
-  assert.equal(readFileSync(join(b, "same.txt"), "utf8"), beforeB.replace("old text", "new text"));
+  assert.equal(readFileSync(physicalFile, "utf8"), beforeB.replace("old text", "new text"));
+  assert.equal(readFileSync(join(b, "actual", asciiName), "utf8"), beforeA);
+  assert.equal((result.details as { workingPath: string }).workingPath, input.path, "invocation metadata retains the addressed path");
   component.updateResult({ ...result, isError: false });
   assert.match(render(component), /B_ONLY_CONTEXT/);
   const replay = new ToolExecutionComponent("edit", "edit-preview", args, {}, definition, ui, a);
   replay.updateResult({ ...result, isError: false });
   assert.match(render(replay), /B_ONLY_CONTEXT/);
   assert.doesNotMatch(render(replay), /A_ONLY_CONTEXT/);
-  console.log("ok: speculative previews wait for admitted paths; queued execution and replay use the same literal directory");
+  const legacy = new ToolExecutionComponent("edit", "legacy-replay", args, {}, definition, ui, a);
+  legacy.updateResult({ ...result, details: { ...result.details as object, workingTarget: undefined, workingPath: physicalFile }, isError: false });
+  assert.match(render(legacy), /B_ONLY_CONTEXT/);
+  assert.doesNotMatch(render(legacy), /A_ONLY_CONTEXT/);
+  writeFileSync(physicalFile, "repeat\nrepeat\n");
+  for (const oldText of ["missing", "repeat"]) {
+    const failedArgs = { path: requested, edits: [{ oldText, newText: "new" }] };
+    const failed = new ToolExecutionComponent("edit", `failed-${oldText}`, failedArgs, {}, definition, ui, a);
+    failed.setArgsComplete();
+    const input = structuredClone(failedArgs);
+    await session.extensionRunner!.emitToolCall({ type: "tool_call", toolName: "edit", toolCallId: `failed-${oldText}`, input });
+    failed.markExecutionStarted();
+    await assert.rejects(() => definition.execute(`failed-${oldText}`, input, undefined, undefined, ctx), error => {
+      assert.ok(error instanceof Error);
+      assert.ok(error.message.includes(physicalFile), error.message);
+      failed.updateResult({ content: [{ type: "text", text: error.message }], details: undefined, isError: true });
+      return true;
+    });
+    for (let attempt = 0; attempt < 200 && !failed.rendererState.callComponent?.preview?.error; attempt++) await delay(5);
+    assert.ok(failed.rendererState.callComponent?.preview?.error, "native failed preview completed");
+    assert.ok(failed.rendererState.callComponent.preview.error.includes(physicalFile),
+      failed.rendererState.callComponent.preview.error);
+    const output = render(failed);
+    assert.doesNotMatch(output, /file:\/\//);
+    assert.equal((output.match(/Could not find the exact text|Found 2 occurrences/g) ?? []).length, 1,
+      "native preview/result error deduplication remains intact");
+  }
+  const writeArgs = { path: "preview-only/new.txt", content: "NEW" };
+  const writeComponent = new ToolExecutionComponent("write", "write-preview", writeArgs, {}, session.getToolDefinition("write")!, ui, a);
+  writeComponent.setArgsComplete();
+  await session.extensionRunner!.emitToolCall({ type: "tool_call", toolName: "write", toolCallId: "write-preview", input: structuredClone(writeArgs) });
+  render(writeComponent);
+  await delay(20);
+  assert.ok(!existsSync(join(b, "preview-only")), "admission/rendering never create write parents");
+  console.log("ok: native traversal/Unicode previews, queued execution, replay metadata and non-mutating write rendering");
 } finally {
   release?.();
   session.dispose();

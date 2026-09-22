@@ -6,6 +6,11 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { BashOperations } from "@earendil-works/pi-coding-agent";
 
+type OutputCallbacks = {
+  onData: (data: Buffer, source: "stdout" | "stderr") => void;
+  onEnd?: (source: "stdout" | "stderr") => void;
+};
+
 const {
   createAgentSession, createBashToolDefinition, createLocalBashOperations, defineTool, DefaultResourceLoader, SessionManager, SettingsManager,
 } = await import(process.env.PI_PACKAGE_DIR
@@ -155,12 +160,20 @@ try {
   for (const owner of ["extension", "sdk"] as const) {
     let calls = 0;
     const custom = defineTool(createBashToolDefinition(alternate, {
-      operations: { async exec(command, _cwd, { onData }) { calls++; onData(Buffer.from(command)); return { exitCode: 0 }; } },
+      operations: { async exec(command, _cwd, { onData, onEnd }: OutputCallbacks) {
+        calls++;
+        onData(Buffer.from(command), "stdout");
+        onEnd?.("stdout");
+        onEnd?.("stderr");
+        return { exitCode: 0 };
+      } },
     }));
     const customUser: BashOperations = {
-      async exec(_command, cwd, { onData }) {
+      async exec(_command, cwd, { onData, onEnd }: OutputCallbacks) {
         assert.equal(cwd, nativeBashCwd ? root : alternate);
-        onData(Buffer.from("custom-user"));
+        onData(Buffer.from("custom-user"), "stdout");
+        onEnd?.("stdout");
+        onEnd?.("stderr");
         return { exitCode: 0 };
       },
     };
