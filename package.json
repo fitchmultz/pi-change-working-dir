@@ -27,6 +27,7 @@
   "scripts": {
     "test": "node --experimental-strip-types test.ts && node --experimental-strip-types test-context.ts && node --experimental-strip-types test-render.ts",
     "test:bash": "node --experimental-strip-types test-bash.ts",
+    "test:install": "node --experimental-strip-types test-install.ts",
     "typecheck": "tsc",
     "check": "npm run typecheck && npm test && npm run pack:check",
     "check:compat": "npm run check && npm run test:bash",

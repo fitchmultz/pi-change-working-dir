@@ -110,4 +110,4 @@ The checks exercise real Pi loading, directory restoration, policy-await snapsho
 PI_PACKAGE_DIR=/absolute/path/to/pi-coding-agent npm run check:compat
 ```
 
-The compatibility matrix covers the latest qualified official/fork cohort on macOS and Linux. Windows is not currently qualified.
+CI runs official Pi on Linux and macOS and the maintained fork on macOS, with a packed-install check and a fork checkpoint check. Windows is not currently qualified.
