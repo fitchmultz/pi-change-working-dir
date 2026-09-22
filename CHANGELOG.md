@@ -3,7 +3,8 @@
 ## Unreleased
 
 - Preserve native filesystem traversal and exact Unicode filenames across default file/search tools, `change_dir`, and `/cwd` on official Pi and the fork.
-- Keep admission and previews non-mutating, reject invalid traversal before delegation, and retain captured invocation paths in execution and replay.
+- Keep admission and previews non-mutating, reject invalid traversal without changing file contents, and retain captured invocation paths in execution and replay.
+- Preserve native mutation ordering, read filename fallbacks, path labels, and executable oversized-read hints.
 - Add native path regressions and focused Windows filesystem comparisons.
 
 ## 0.5.0 - 2026-09-22

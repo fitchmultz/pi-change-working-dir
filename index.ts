@@ -13,8 +13,9 @@ import {
   type ExtensionContext,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { accessSync, constants, realpathSync, statSync } from "node:fs";
-import { lstat, mkdir, readlink, realpath, stat } from "node:fs/promises";
+import * as host from "@earendil-works/pi-coding-agent";
+import { accessSync, constants, lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { access, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -84,31 +85,56 @@ const bindPath = (path: unknown, cwd: string): unknown =>
 
 // Official Pi has no target resolver export. Keep its default publisher, but validate
 // each native parent/link before handing a canonical file URL to either host.
-async function writeTarget(path: string): Promise<string> {
+function fileTarget(path: string): string {
   const links = new Set<string>();
   for (;;) {
     if (path.endsWith(sep) || path.endsWith("/")) {
-      await stat(path);
-      return realpath(path);
+      statSync(path);
+      return realpathSync.native(path);
     }
     const parentPath = dirname(path);
-    if (!(await stat(parentPath)).isDirectory()) {
+    if (!statSync(parentPath).isDirectory()) {
       throw Object.assign(new Error(`Not a directory: ${parentPath}`), { code: "ENOTDIR" });
     }
-    const parent = await realpath(parentPath);
+    const parent = realpathSync.native(parentPath);
     const target = join(parent, basename(path));
-    const info = await lstat(target).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== "ENOENT") throw error;
-      return undefined;
-    });
-    if (!info) return target;
-    if (!info.isSymbolicLink()) return realpath(target);
+    let info;
+    try { info = lstatSync(target); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return target;
+    }
+    if (!info.isSymbolicLink()) return realpathSync.native(target);
     if (links.has(target)) throw Object.assign(new Error(`Symlink cycle: ${target}`), { code: "ELOOP" });
     links.add(target);
-    const link = await readlink(target);
+    const link = readlinkSync(target);
     path = isAbsolute(link) ? link : `${parent}${sep}${link}`;
   }
 }
+
+// Discover queue identity without awaiting, creating parents, or admitting invalid I/O.
+// Revisit symlinks after resolving absent components such as missing/../link.
+function queueTarget(path: string, links = new Set<string>()): string {
+  try { return realpathSync.native(path); } catch { /* Resolve prospective parents below. */ }
+  const parentPath = dirname(path);
+  if (parentPath === path) return path;
+  const parent = queueTarget(parentPath, links);
+  const target = join(parent, basename(path));
+  try {
+    if (lstatSync(target).isSymbolicLink()) {
+      if (links.has(target)) return target;
+      links.add(target);
+      const link = readlinkSync(target);
+      return queueTarget(isAbsolute(link) ? link : `${parent}${sep}${link}`, links);
+    }
+    return realpathSync.native(target);
+  } catch { return target; }
+}
+
+// Reuse each host's publisher: the fork exports its atomic publisher; official Pi
+// uses writeFile. The optional export is never required from official installations.
+const publishFile = (host as typeof host & {
+  publishLocalFile?: (path: string, content: string, signal?: AbortSignal) => Promise<void>;
+}).publishLocalFile;
 
 export default function (pi: ExtensionAPI & {
   registerBashCwdHook?: (hook: (cwd: string) => string) => void;
@@ -207,29 +233,73 @@ export default function (pi: ExtensionAPI & {
       try {
         signal?.throwIfAborted();
         let target: string | undefined;
-        if (path) {
-          if (definition.name === "write") {
-            await mkdir(dirname(path), { recursive: true });
-            signal?.throwIfAborted();
-            target = await writeTarget(path);
-          } else {
-            await stat(path);
-            signal?.throwIfAborted();
-            target = await realpath(path);
+        let delegate = definition;
+        let delegatedPath: string | undefined;
+        const showTarget = (value?: string) => {
+          target = value;
+          const rendering = renderCalls.get(id);
+          if (rendering) {
+            rendering.state.workingDirectory = cwd;
+            rendering.state.workingTarget = value;
+            rendering.invalidate();
           }
+        };
+        const mutation = definition.name === "write" || definition.name === "edit";
+        if (!path) showTarget();
+        if (path && mutation) {
+          // Factory execution registers its queue before any asynchronous preparation.
+          delegatedPath = pathToFileURL(queueTarget(path)).href;
+          if (definition.name === "edit") {
+            try { statSync(path); showTarget(fileTarget(path)); } catch { /* Missing previews wait for queued validation. */ }
+          }
+          const publish = async (_path: string, content: string) => {
+            signal?.throwIfAborted();
+            const publishedTarget = fileTarget(path);
+            showTarget(publishedTarget);
+            if (publishFile) await publishFile(publishedTarget, content, signal);
+            else await writeFile(publishedTarget, content, "utf8");
+          };
+          delegate = definition.name === "write"
+            ? createWriteToolDefinition(cwd, { operations: {
+              mkdir: async () => { await mkdir(dirname(path), { recursive: true }); },
+              writeFile: publish,
+            } })
+            : createEditToolDefinition(cwd, { operations: {
+              access: async () => {
+                await access(path, constants.R_OK | constants.W_OK);
+                await stat(path);
+                signal?.throwIfAborted();
+                showTarget(await realpath(path));
+              },
+              readFile: async () => readFile(path),
+              writeFile: publish,
+            } });
+        } else if (path) {
+          try {
+            await stat(path);
+            showTarget(await realpath(path));
+          } catch (error) {
+            if (definition.name !== "read" || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            // A valid parent lets native read try its screenshot/quote/Unicode fallbacks.
+            showTarget(fileTarget(path));
+          }
+          delegatedPath = pathToFileURL(target!).href;
         }
         signal?.throwIfAborted();
-        const rendering = renderCalls.get(id);
-        if (rendering) {
-          rendering.state.workingDirectory = cwd;
-          rendering.state.workingPath = path;
-          rendering.state.workingTarget = target;
-          rendering.invalidate();
-        }
         // File URLs bypass host Unicode-space rewriting as well as lexical traversal.
-        const input = target ? { ...params, path: pathToFileURL(target).href } : params;
+        const input = delegatedPath ? { ...params, path: delegatedPath } : params;
         const executionContext = Object.create(ctx, { cwd: { value: cwd, enumerable: true } }) as ExtensionContext;
-        const result = await definition.execute(id, input, signal, onUpdate, executionContext);
+        const result = await delegate.execute(id, input, signal, onUpdate, executionContext);
+        // Only generated summaries/hints contain delegated URLs; never rewrite file contents.
+        if (delegatedPath && target && (mutation || result.details?.truncation?.firstLineExceedsLimit)) {
+          const displayPath = mutation ? target : `'${target.replaceAll("'", "'\\''")}'`;
+          result.content = result.content.map((block) => block.type === "text"
+            ? { ...block, text: block.text.replaceAll(delegatedPath, displayPath) } : block);
+          const header = `--- ${delegatedPath}\n+++ ${delegatedPath}\n`;
+          if (typeof result.details?.patch === "string" && result.details.patch.startsWith(header)) {
+            result.details.patch = `--- ${target}\n+++ ${target}\n${result.details.patch.slice(header.length)}`;
+          }
+        }
         return {
           ...result,
           details: { ...result.details, workingDirectory: cwd, ...(path ? { workingPath: path, workingTarget: target } : {}) },
@@ -241,8 +311,10 @@ export default function (pi: ExtensionAPI & {
     ...(definition.renderCall ? {
       renderCall(args, theme, ctx: RenderContext) {
         if (!ctx.state.workingDirectory) renderCalls.set(ctx.toolCallId, ctx);
+        // Native edit uses path for preview I/O and the legacy alias for its label.
         const bound = ctx.state.workingTarget && args && typeof args === "object"
-          ? { ...args, path: pathToFileURL(ctx.state.workingTarget).href } : args;
+          ? { ...args, path: definition.name === "edit" ? pathToFileURL(ctx.state.workingTarget).href : ctx.state.workingTarget,
+            file_path: ctx.state.workingTarget } : args;
         return definition.renderCall!(bound, theme, {
           ...ctx,
           cwd: ctx.state.workingDirectory ?? ctx.cwd,
@@ -256,7 +328,6 @@ export default function (pi: ExtensionAPI & {
         const details = result.details as { workingDirectory?: string; workingPath?: string; workingTarget?: string } | undefined;
         if (details?.workingDirectory) {
           ctx.state.workingDirectory = details.workingDirectory;
-          ctx.state.workingPath = details.workingPath;
           ctx.state.workingTarget = details.workingTarget ?? details.workingPath;
         }
         renderCalls.delete(ctx.toolCallId);
@@ -264,7 +335,8 @@ export default function (pi: ExtensionAPI & {
           ...ctx,
           cwd: ctx.state.workingDirectory ?? ctx.cwd,
           args: ctx.state.workingTarget && ctx.args && typeof ctx.args === "object"
-            ? { ...ctx.args, path: pathToFileURL(ctx.state.workingTarget).href } : ctx.args,
+            ? { ...ctx.args, path: definition.name === "edit" ? pathToFileURL(ctx.state.workingTarget).href : ctx.state.workingTarget,
+              file_path: ctx.state.workingTarget } : ctx.args,
         });
       },
     } : {}),

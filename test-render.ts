@@ -68,6 +68,7 @@ try {
   for (let attempt = 0; attempt < 200 && !render(component).includes("B_ONLY_CONTEXT"); attempt++) await delay(5);
   assert.match(render(component), /B_ONLY_CONTEXT/);
   assert.doesNotMatch(render(component), /A_ONLY_CONTEXT/);
+  assert.doesNotMatch(render(component), /file:\/\//, "render native path labels rather than delegated URLs");
   release();
   await lock;
   const result = await executing;

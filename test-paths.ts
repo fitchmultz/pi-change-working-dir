@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, parse, sep, toNamespacedPath } from "node:path";
+import { spawnSync } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
-const { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager } = await import(process.env.PI_PACKAGE_DIR
+const { createAgentSession, createEditToolDefinition, createWriteToolDefinition, DefaultResourceLoader, SessionManager, SettingsManager, withFileMutationQueue } = await import(process.env.PI_PACKAGE_DIR
   ? pathToFileURL(join(process.env.PI_PACKAGE_DIR, "dist/index.js")).href
   : "@earendil-works/pi-coding-agent") as typeof import("@earendil-works/pi-coding-agent");
 
@@ -75,10 +77,103 @@ try {
     writeFileSync(join(root, name), "EXACT\n");
     writeFileSync(join(root, "space name.txt"), "NEIGHBOR\n");
     assert.equal(text(await execute("read", { path: name })), "EXACT");
-    await execute("edit", { path: name, edits: [{ oldText: "EXACT", newText: "EDITED" }] });
-    await execute("write", { path: name, content: "EXACT_UPDATED\n" });
+    const edited = await execute("edit", { path: name, edits: [{ oldText: "EXACT", newText: "EDITED" }] });
+    const written = await execute("write", { path: name, content: "EXACT_UPDATED\n" });
+    assert.equal(text(edited), `Successfully replaced 1 block(s) in ${join(root, name)}.`);
+    assert.equal(text(written), `Successfully wrote to ${join(root, name)}`);
+    assert.ok((edited.details as { patch: string }).patch.startsWith(`--- ${join(root, name)}\n`));
     assert.equal(readFileSync(join(root, name), "utf8"), "EXACT_UPDATED\n");
     assert.equal(readFileSync(join(root, "space name.txt"), "utf8"), "NEIGHBOR\n");
+  }
+  for (const [stored, requested] of [
+    ["Shot at 10.00.00\u202fAM.txt", "Shot at 10.00.00 AM.txt"],
+    ["d\u2019ecran.txt", "d'ecran.txt"],
+    ["caf\u00e9.txt".normalize("NFD"), "caf\u00e9.txt"],
+  ]) {
+    writeFileSync(join(root, stored!), "FALLBACK");
+    assert.equal(text(await execute("read", { path: requested })), "FALLBACK");
+    if (process.platform !== "win32") await assert.rejects(() => execute("read", { path: `absent/../${requested}` }));
+  }
+  const hugeName = "huge '$ literal.txt";
+  writeFileSync(join(root, hugeName), "X".repeat(60_000));
+  const hint = text(await execute("read", { path: hugeName }));
+  assert.doesNotMatch(hint, /file:\/\//);
+  if (process.platform !== "win32") {
+    const command = hint.match(/Use bash: (.*)\]$/)?.[1];
+    assert.ok(command);
+    const output = spawnSync("bash", ["-c", command], { encoding: "utf8" });
+    assert.equal(output.status, 0, output.stderr);
+    assert.equal(output.stdout, "X".repeat(50 * 1024));
+  }
+  const literalURL = pathToFileURL(join(root, "url-content.txt")).href;
+  writeFileSync(join(root, "url-content.txt"), literalURL);
+  assert.equal(text(await execute("read", { path: "url-content.txt" })), literalURL);
+
+  // Native factories retain FIFO acquisition and their publisher under held locks.
+  const ctx = session.extensionRunner!.createContext();
+  for (const adapted of [false, true]) {
+    const write = adapted ? session.getToolDefinition("write")! : createWriteToolDefinition(root);
+    const edit = adapted ? session.getToolDefinition("edit")! : createEditToolDefinition(root);
+    for (const existing of [false, true]) {
+      const path = join(root, `${adapted}-${existing}.txt`);
+      if (existing) writeFileSync(path, "FIRST\nBEFORE\n");
+      let release!: () => void, ready!: () => void;
+      const entered = new Promise<void>(resolve => { ready = resolve; });
+      const hold = new Promise<void>(resolve => { release = resolve; });
+      const lock = withFileMutationQueue(path, async () => { ready(); await hold; });
+      await entered;
+      let failure: unknown;
+      const writing = write.execute("queued-write", { path, content: "FIRST\nAFTER\n" }, undefined, undefined, ctx);
+      const editing = edit.execute("queued-edit", { path, edits: [{ oldText: "FIRST", newText: "FINAL" }] }, undefined, undefined, ctx)
+        .catch(error => { failure = error; });
+      try {
+        await delay(20);
+        assert.equal(failure, undefined, "edit must wait for the queued creator");
+      } finally { release(); }
+      await Promise.all([lock, writing, editing]);
+      assert.equal(failure, undefined);
+      assert.equal(readFileSync(path, "utf8"), "FINAL\nAFTER\n");
+    }
+  }
+  const inodeChanges: boolean[] = [];
+  for (const adapted of [false, true]) {
+    const path = join(root, `publisher-${adapted}.txt`);
+    writeFileSync(path, "OLD");
+    const before = statSync(path).ino;
+    const write = adapted ? session.getToolDefinition("write")! : createWriteToolDefinition(root);
+    await write.execute("publisher", { path, content: "NEW" }, undefined, undefined, ctx);
+    inodeChanges.push(statSync(path).ino !== before);
+  }
+  assert.equal(inodeChanges[1], inodeChanges[0], "reuse the selected host's publication semantics");
+  for (const cancel of [false, true]) {
+    const name = `held-parents-${cancel}`;
+    const path = addressed(`queue-missing${sep}..${sep}link${sep}..${sep}${name}${sep}file.txt`);
+    const target = join(expectedDir, name, "file.txt");
+    let release!: () => void, ready!: () => void;
+    const entered = new Promise<void>(resolve => { ready = resolve; });
+    const hold = new Promise<void>(resolve => { release = resolve; });
+    const lock = withFileMutationQueue(target, async () => { ready(); await hold; });
+    await entered;
+    const controller = new AbortController();
+    const writing = session.getToolDefinition("write")!.execute("parents", { path, content: "OLD" }, controller.signal, undefined, ctx);
+    const outcome = writing.then(() => undefined, error => error);
+    const editing = cancel ? undefined : session.getToolDefinition("edit")!.execute("parents-edit",
+      { path, edits: [{ oldText: "OLD", newText: "NEW" }] }, undefined, undefined, ctx);
+    try {
+      await delay(20);
+      assert.ok(!existsSync(join(expectedDir, name)), "parent creation waits inside the native queue");
+      if (cancel) controller.abort();
+    } finally { release(); }
+    await lock;
+    const error = await outcome;
+    if (cancel) {
+      assert.match(String(error), /abort/i);
+      assert.ok(!existsSync(join(expectedDir, name)));
+    } else {
+      assert.equal(error, undefined);
+      await editing;
+      assert.equal(readFileSync(target, "utf8"), "NEW");
+    }
   }
   if (process.platform === "win32") {
     const drive = parse(root).root.slice(0, 2);

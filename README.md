@@ -39,7 +39,7 @@ Restart Pi after updating extension code. For local development: `pi -e ./index.
 
 Default-tool adapters preserve native schemas, renderers, cancellation, truncation, and file queues. Speculative edit previews wait until the target is admitted. Already-running calls retain their captured directory if another call changes the selection.
 
-Paths follow native filesystem traversal, including symlinks, `..`, trailing separators, and exact Unicode names. Admission and previews never create directories. Only an executing `write` creates its addressed parents; reads and edits require existing paths. Validated targets are delegated to Pi's existing factories and publishers.
+Paths follow native filesystem traversal, including symlinks, `..`, trailing separators, and exact Unicode names. Native read filename fallbacks remain available. Admission and previews never create directories. Mutation validation and write-parent creation run inside Pi's existing file queue, so queued edits can follow queued file creation. The adapters retain each host's native publisher.
 
 Custom tools, custom definitions under built-in names, and remote/sandbox executors are not replaced. They must integrate explicitly if they should follow directory changes. The extension does not patch `process.cwd()`, `child_process`, or `pi.exec`. An explicit subprocess directory always remains explicit.
 
