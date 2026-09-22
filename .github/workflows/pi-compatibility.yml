@@ -1,8 +1,6 @@
 name: Pi compatibility
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -10,11 +8,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: pi-compatibility-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: pi-compatibility-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   compatibility:
-    uses: fitchmultz/.github/.github/workflows/pi-compatibility.yml@117b227140265329055bcda5927ac170c6301d75 # v1.0.0
-    with:
-      automation-ref: 117b227140265329055bcda5927ac170c6301d75 # v1.0.0
+    uses: ./.github/workflows/check.yml
