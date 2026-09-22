@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0 - 2026-09-22
+
+- Expose one session-scoped execution-directory interface for cooperating extensions, including explicit child-directory initialization.
+- Route default native file, search, Bash, and PowerShell tools through captured invocation directories while retaining native execution, cancellation, output, and file queues.
+- Keep speculative edit previews and final results on the admitted file, including literal working-directory names.
+- Preserve prompt prefixes with structured directory updates through commands, tool turns, branch restoration, compaction, and supported fresh-context boundaries.
+- Enable strict JSON Schema for `change_dir` and initialize correctly for SDK prompts without an explicit extension bind.
+- Remove process-global spawn interception, custom-tool argument rewriting, and unused FFF integration. Custom extensions resolve their own operation directory through the public interface; explicit process directories remain untouched.
+- Preserve project settings, trust, instructions, session identity, reset behavior, and the existing distinction between unavailable saved directories and removed live directories.
+- Qualify the portable implementation on official Pi 0.87.0 and the matching fork.
+
 ## 0.4.3 - 2026-09-19
 
 - Keep native CLI Bash working on released Pi after the original directory is removed, preserving configured shell and command prefix through Pi's native Bash factory.
