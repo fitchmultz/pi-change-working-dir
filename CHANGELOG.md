@@ -6,6 +6,7 @@
 - Keep admission and previews non-mutating, reject invalid traversal without changing file contents, and retain captured invocation paths in execution and replay.
 - Preserve native mutation ordering, read filename fallbacks, path labels, and executable oversized-read hints.
 - Add native path regressions and focused Windows filesystem comparisons.
+- Qualify against official Pi 0.87.1 and compatible forks.
 
 ## 0.5.0 - 2026-09-22
 

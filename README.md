@@ -18,7 +18,7 @@ Directory changes affect execution. Project settings, trust, AGENTS.md, skills, 
 { "packages": ["git:github.com/fitchmultz/pi-change-working-dir"] }
 ```
 
-Requires official Pi 0.87.0 or a compatible fork. Development and CI cover both official Pi and `fitchmultz/pi`.
+Requires official Pi 0.87.0 or a compatible fork. Development and CI cover official Pi 0.87.1 and `fitchmultz/pi`.
 
 ```sh
 pi update --extension git:github.com/fitchmultz/pi-change-working-dir --approve
