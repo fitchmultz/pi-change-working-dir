@@ -11,7 +11,7 @@ const { createAgentSession, createEditToolDefinition, createWriteToolDefinition,
   ? pathToFileURL(join(process.env.PI_PACKAGE_DIR, "dist/index.js")).href
   : "@earendil-works/pi-coding-agent") as typeof import("@earendil-works/pi-coding-agent");
 
-const root = realpathSync(mkdtempSync(join(tmpdir(), "cwd-paths-")));
+const root = realpathSync.native(mkdtempSync(join(tmpdir(), "cwd-paths-")));
 const agentDir = join(root, "agent");
 mkdirSync(agentDir);
 mkdirSync(join(root, "actual/nested"), { recursive: true });
