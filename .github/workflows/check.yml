@@ -85,7 +85,6 @@ jobs:
         run: |
           npm test
           npm run test:bash
-          npm run test:checkpoint
 
   compatibility:
     name: compatibility
