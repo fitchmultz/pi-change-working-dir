@@ -357,7 +357,7 @@ try {
   await session.prompt("establish C before settlement commands");
   const beforeSettlementSnapshots = snapshots().length;
   beforeSettle = async ctx => {
-    assert.equal(ctx.signal, undefined, "the low-level run has ended");
+    assert.equal(session!.agent.signal, undefined, "the low-level run has ended");
     assert.equal(ctx.isIdle(), false, "the session has not settled");
     assert.equal(session!.isStreaming, true, "native custom messages still queue until settlement");
     await session!.prompt(`/cwd ${next}`);
