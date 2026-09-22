@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.1 - 2026-09-22
 
 - Preserve native filesystem traversal and exact Unicode filenames across default file/search tools, `change_dir`, and `/cwd` on official Pi and the fork.
 - Keep admission and previews non-mutating, reject invalid traversal without changing file contents, and retain captured invocation paths in execution and replay.
