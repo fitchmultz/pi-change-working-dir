@@ -14,7 +14,7 @@ const packageUrl = process.env.PI_PACKAGE_DIR
   : import.meta.resolve("@earendil-works/pi-coding-agent");
 const agentUrl = pathToFileURL(findPackageJSON("@earendil-works/pi-agent-core", packageUrl)!);
 const aiUrl = pathToFileURL(findPackageJSON("@earendil-works/pi-ai", packageUrl)!);
-const { AgentSession, SessionManager, SettingsManager, ModelRuntime, createReadTool, createWriteTool, createEventBus } =
+const { AgentSession, SessionManager, SettingsManager, ModelRuntime, createReadTool, createEventBus } =
   await import(packageUrl) as typeof import("@earendil-works/pi-coding-agent");
 const { createExtensionRuntime, loadExtensionFromFactory, loadExtensions } =
   await import(new URL("./core/extensions/loader.js", packageUrl).href) as typeof import("./node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js");
@@ -151,7 +151,7 @@ async function makeSession(reason: SessionStartEvent["reason"] = "startup", real
       requests.push(structuredClone(context.messages));
       assert.ok(getCurrentSystemPrompt(context.messages).includes(unrelatedSection));
       assert.deepEqual(getCurrentTools(context.messages).map(tool => tool.name).sort(),
-        realExtension ? ["change_dir", "read", "write"] : ["change_dir", "fresh_context", "read"]);
+        realExtension ? ["bash", "change_dir", "edit", "read", "write"] : ["change_dir", "fresh_context", "read"]);
       const message = responses.shift() ?? fauxAssistantMessage("done");
       const stream = createAssistantMessageEventStream();
       stream.push({ type: "done", reason: message.stopReason === "toolUse" ? "toolUse" : "stop", message });
@@ -161,7 +161,7 @@ async function makeSession(reason: SessionStartEvent["reason"] = "startup", real
   const session = new AgentSession({
     agent, sessionManager: manager, settingsManager: SettingsManager.inMemory({ compaction: { enabled: false, keepRecentTokens: 1 } }),
     cwd, modelRuntime, resourceLoader,
-    baseToolsOverride: { read: createReadTool(cwd), ...(realExtension ? { write: createWriteTool(cwd) } : {}) },
+    baseToolsOverride: realExtension ? undefined : { read: createReadTool(cwd) },
     extensionRunnerRef: ref,
     sessionStartEvent: { type: "session_start", reason },
   });
