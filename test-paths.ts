@@ -73,6 +73,16 @@ try {
   assert.equal(readFileSync(join(root, "@literal/inside.txt"), "utf8"), "LITERAL");
   await execute("change_dir", { path: root });
 
+  writeFileSync(join(root, "@notes.txt"), "AT_FILE\n");
+  writeFileSync(join(root, "notes.txt"), "PLAIN_FILE\n");
+  assert.equal(text(await execute("read", { path: "@notes.txt" })), "AT_FILE");
+  await execute("edit", { path: "@notes.txt", edits: [{ oldText: "AT_FILE", newText: "EDITED" }] });
+  assert.equal(readFileSync(join(root, "@notes.txt"), "utf8"), "EDITED\n");
+  assert.equal(readFileSync(join(root, "notes.txt"), "utf8"), "PLAIN_FILE\n");
+  await execute("write", { path: "@notes.txt", content: "WRITTEN\n" });
+  assert.equal(readFileSync(join(root, "@notes.txt"), "utf8"), "WRITTEN\n");
+  assert.equal(readFileSync(join(root, "notes.txt"), "utf8"), "PLAIN_FILE\n");
+
   for (const name of ["space\u00a0name.txt", "space\u202fname.txt", "literal%23#.txt",
     "a$$b.txt", "a$&b.txt", "a$'b.txt", "a$`b.txt"]) {
     writeFileSync(join(root, name), "EXACT\n");

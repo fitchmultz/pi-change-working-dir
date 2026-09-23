@@ -79,7 +79,7 @@ const operationPath = (path: string, cwd: string): string => {
 };
 
 const bindPath = (path: unknown, cwd: string): unknown =>
-  typeof path === "string" && path ? operationPath(path.startsWith("@") ? path.slice(1) : path, cwd) : path;
+  typeof path === "string" && path ? operationPath(path, cwd) : path;
 
 // The hosts' read-path helper is private. Preserve its ordered full-path variants,
 // validating each with native traversal before canonicalization.
