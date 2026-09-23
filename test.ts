@@ -67,8 +67,8 @@ const entries = (session: Session) => session.sessionManager.getBranch().filter(
 
 try {
   const { session, api } = await setup();
-  const checkpointBlockers = async () => {
-    const runner = session.extensionRunner! as typeof session.extensionRunner & {
+  const checkpointBlockers = async (activeSession: Session = session) => {
+    const runner = activeSession.extensionRunner! as typeof activeSession.extensionRunner & {
       prepareCheckpoint(event: { type: "session_checkpoint"; boundary: "settled"; signal: AbortSignal; invalidate(): void }): Promise<string[]>;
     };
     assert.equal(typeof runner.prepareCheckpoint, "function");
@@ -195,6 +195,22 @@ try {
   await session.reload();
   assert.match(text(await execute(session, "read", { path: "same.txt" })), /RETURNED/);
   await session.prompt("/cwd -");
+
+  // An explicit selection must not revert to a movable session-directory symlink.
+  const alias = join(root, "origin-alias");
+  symlinkSync(target, alias, process.platform === "win32" ? "junction" : "dir");
+  const aliased = await setup({ cwd: alias });
+  await execute(aliased.session, "change_dir", { path: target });
+  assert.deepEqual(query(aliased.api, aliased.session), { cwd: target });
+  if (process.env.PI_COMPAT_HOST === "fork") assert.deepEqual(await checkpointBlockers(aliased.session), []);
+  await aliased.session.reload();
+  rmSync(alias);
+  symlinkSync(other, alias, process.platform === "win32" ? "junction" : "dir");
+  await execute(aliased.session, "write", { path: "pinned.txt", content: "PINNED\n" });
+  assert.equal(readFileSync(join(target, "pinned.txt"), "utf8"), "PINNED\n");
+  assert.ok(!existsSync(join(other, "pinned.txt")));
+  await aliased.session.prompt("/cwd -");
+  assert.match(text(await execute(aliased.session, "read", { path: "same.txt" })), /OTHER/);
 
   // Custom definitions are never replaced, rebased or stripped of their executor.
   const customRead = createReadToolDefinition(other);

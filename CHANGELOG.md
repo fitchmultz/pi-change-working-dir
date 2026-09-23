@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Preserve namespaced custom-tool arguments when their names match built-in tools.
+- Keep an explicitly selected directory pinned when the session started through a symlink, even if both paths initially resolve to the same place.
 
 ## 0.5.2 - 2026-09-22
 
