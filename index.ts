@@ -217,10 +217,10 @@ export default function (pi: ExtensionAPI & {
         pi.appendEntry(ENTRY_TYPE, { dir: next });
       } finally {
         updateStatus(ctx);
-        recordContext(ctx, target, undefined, true);
+        recordContext(ctx, current(ctx), undefined, true);
       }
     }
-    return target;
+    return current(ctx);
   };
 
   const bindInvocation = (name: string, input: Record<string, unknown>, cwd: string) => {

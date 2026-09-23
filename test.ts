@@ -210,6 +210,11 @@ try {
   assert.equal(readFileSync(join(target, "pinned.txt"), "utf8"), "PINNED\n");
   assert.ok(!existsSync(join(other, "pinned.txt")));
   await aliased.session.prompt("/cwd -");
+  const resetSnapshot = aliased.session.sessionManager.getBranch().findLast(
+    (entry): entry is Extract<typeof entry, { type: "custom_message" }> =>
+      entry.type === "custom_message" && entry.customType === "change-working-dir:context",
+  );
+  assert.equal((resetSnapshot?.details as { cwd?: string } | undefined)?.cwd, alias);
   assert.match(text(await execute(aliased.session, "read", { path: "same.txt" })), /OTHER/);
 
   // Custom definitions are never replaced, rebased or stripped of their executor.
