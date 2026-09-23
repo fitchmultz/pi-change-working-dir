@@ -1,6 +1,6 @@
 /** Native request/branch regression checks; PI_PACKAGE_DIR optionally selects a fork installation. */
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { findPackageJSON } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -151,7 +151,7 @@ async function makeSession(reason: SessionStartEvent["reason"] = "startup", real
       requests.push(structuredClone(context.messages));
       assert.ok(getCurrentSystemPrompt(context.messages).includes(unrelatedSection));
       assert.deepEqual(getCurrentTools(context.messages).map(tool => tool.name).sort(),
-        realExtension ? ["change_dir", "read"] : ["change_dir", "fresh_context", "read"]);
+        realExtension ? ["bash", "change_dir", "edit", "read", "write"] : ["change_dir", "fresh_context", "read"]);
       const message = responses.shift() ?? fauxAssistantMessage("done");
       const stream = createAssistantMessageEventStream();
       stream.push({ type: "done", reason: message.stopReason === "toolUse" ? "toolUse" : "stop", message });
@@ -160,7 +160,9 @@ async function makeSession(reason: SessionStartEvent["reason"] = "startup", real
   });
   const session = new AgentSession({
     agent, sessionManager: manager, settingsManager: SettingsManager.inMemory({ compaction: { enabled: false, keepRecentTokens: 1 } }),
-    cwd, modelRuntime, resourceLoader, baseToolsOverride: { read: createReadTool(cwd) }, extensionRunnerRef: ref,
+    cwd, modelRuntime, resourceLoader,
+    baseToolsOverride: realExtension ? undefined : { read: createReadTool(cwd) },
+    extensionRunnerRef: ref,
     sessionStartEvent: { type: "session_start", reason },
   });
   session.subscribe(() => {});
@@ -352,6 +354,26 @@ try {
     { modelCwd: cwd, snapshots: [next, cwd] },
   ], "queued return snapshots must survive both persisted-state and initial-anchor deduplication");
   checks.push("real same-batch B→C and B→initial-anchor returns preserve both queued snapshots and final cwd");
+
+  const existingFile = join(cwd, "existing.txt");
+  writeFileSync(existingFile, "ORIGINAL\n");
+  responses.push(fauxAssistantMessage([
+    fauxToolCall("change_dir", { path: join(root, "missing-worktree") }),
+    fauxToolCall("write", { path: "existing.txt", content: "OVERWRITTEN\n" }),
+  ], { stopReason: "toolUse" }), fauxAssistantMessage("finished"));
+  await session.prompt("change to the missing worktree, then write the file");
+  const failedBatch = current().filter((message): message is ToolResultMessage => message.role === "toolResult").slice(-2);
+  assert.deepEqual(failedBatch.map((message) => [message.toolName, message.isError]), [
+    ["change_dir", true], ["write", true],
+  ], "a failed directory change must block later calls in the same batch");
+  assert.equal(readFileSync(existingFile, "utf8"), "ORIGINAL\n");
+  responses.push(fauxAssistantMessage(fauxToolCall("read", { path: "existing.txt" }), { stopReason: "toolUse" }),
+    fauxAssistantMessage("read"));
+  await session.prompt("read the original file on the next turn");
+  const nextRead = current().filter((message): message is ToolResultMessage => message.role === "toolResult" && message.toolName === "read").at(-1);
+  assert.equal(nextRead?.isError, false);
+  assert.match(nextRead.content[0].type === "text" ? nextRead.content[0].text : "", /ORIGINAL/);
+  checks.push("failed change_dir does not let a sibling overwrite a file in the original directory");
 
   await session.prompt(`/cwd ${third}`);
   await session.prompt("establish C before settlement commands");
