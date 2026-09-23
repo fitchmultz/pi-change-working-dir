@@ -254,6 +254,18 @@ try {
   await execute("change_dir", { path: unicodeCwd });
   assert.equal(text(await execute("read", { path: "a\u00a0b.txt" })), "SCOPED_FALLBACK");
   await execute("change_dir", { path: root });
+  for (const [selectedName, neighborName, stored, requested] of [
+    ["developer's-project", "developer’s-project", "don’t.txt", "don't.txt"],
+    ["Shots at 10 AM.dir", "Shots at 10\u202fAM.dir", "Shot at 10\u202fAM.txt", "Shot at 10 AM.txt"],
+  ]) {
+    const selected = join(root, selectedName!), neighbor = join(root, neighborName!);
+    mkdirSync(selected); mkdirSync(neighbor);
+    writeFileSync(join(selected, stored!), "SELECTED_PROJECT");
+    writeFileSync(join(neighbor, stored!), "WRONG_PROJECT");
+    await execute("change_dir", { path: selected });
+    assert.equal(text(await execute("read", { path: requested })), "SELECTED_PROJECT");
+    await execute("change_dir", { path: root });
+  }
   for (const [name, extra] of [
     ["ls", {}], ["find", { pattern: "selected.txt" }], ["grep", { pattern: "SEARCH_MARKER" }],
   ] as const) {

@@ -34,7 +34,7 @@ type DirectoryRequest = {
   path?: unknown;
   result?: { cwd: string; error?: string };
 };
-type Invocation = { cwd: string; readFallback?: { bound: string; spaced: string } };
+type Invocation = { cwd: string; readFallback?: { bound: string; requested: string } };
 type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2];
 
 const expandTilde = (path: string): string =>
@@ -81,14 +81,17 @@ const operationPath = (path: string, cwd: string): string => {
 const bindPath = (path: unknown, cwd: string): unknown =>
   typeof path === "string" && path ? operationPath(path, cwd) : path;
 
-// The hosts' read-path helper is private. Preserve its ordered full-path variants,
-// validating each with native traversal before canonicalization.
-async function readTarget(path: string, spaced = path.replace(UNICODE_SPACES, " ")): Promise<string> {
+// The hosts' read-path helper is private. Apply its ordered variants to the request
+// before binding to cwd, then validate native traversal before canonicalization.
+async function readTarget(path: string, cwd: string): Promise<string> {
+  if (path.startsWith("file://")) path = fileURLToPath(path);
+  const spaced = path.replace(UNICODE_SPACES, " ");
   const nfd = spaced.normalize("NFD");
   const variants = new Set([path, spaced, spaced.replace(/ (AM|PM)\./gi, "\u202f$1."),
     nfd, spaced.replace(/'/g, "\u2019"), nfd.replace(/'/g, "\u2019")]);
   let failure: unknown;
-  for (const candidate of variants) {
+  for (const variant of variants) {
+    const candidate = operationPath(variant, cwd);
     try { await stat(candidate); } catch (error) { failure ??= error; continue; }
     return realpath(candidate);
   }
@@ -231,9 +234,9 @@ export default function (pi: ExtensionAPI & {
       input.path = DEFAULT_PATH_TOOLS.has(name) && (input.path === undefined || input.path === "")
         ? cwd : bindPath(input.path, cwd);
     }
-    // Normalize the requested spelling, never Unicode spaces in a captured cwd.
+    // Keep the requested spelling so filename fallbacks never rewrite the captured cwd.
     const readFallback = name === "read" && typeof rawPath === "string" && typeof input.path === "string"
-      ? { bound: input.path, spaced: bindPath(rawPath.replace(UNICODE_SPACES, " "), cwd) as string } : undefined;
+      ? { bound: input.path, requested: rawPath } : undefined;
     invocations.set(input, { cwd, readFallback });
   };
 
@@ -293,7 +296,7 @@ export default function (pi: ExtensionAPI & {
             } });
         } else if (path) {
           if (definition.name === "read") {
-            showTarget(await readTarget(path, readFallback?.bound === path ? readFallback.spaced : undefined));
+            showTarget(await readTarget(readFallback?.bound === path ? readFallback.requested : path, cwd));
           } else {
             await stat(path);
             showTarget(await realpath(path));
