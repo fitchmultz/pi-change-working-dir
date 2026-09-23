@@ -448,6 +448,7 @@ export default function (pi: ExtensionAPI & {
   });
 
   pi.on("tool_call", (event, ctx) => {
+    if ("namespace" in event && event.namespace !== undefined) return;
     initialize(ctx);
     const owner = ownedTools.get(event.toolName);
     if (owner && pi.getAllTools().find((tool) => tool.name === event.toolName)?.sourceInfo.path === owner) {

@@ -95,6 +95,11 @@ try {
     assert.match(text(await execute(session, "read", { path })), /TARGET/);
   }
   assert.match(text(await execute(session, "read", { path: join(origin, "same.txt") })), /ORIGIN/);
+  const namespacedRead = { type: "tool_call" as const, toolCallId: "namespaced", toolName: "read",
+    namespace: "documents", input: { path: "same.txt" } };
+  const namespacedResult = await session.extensionRunner!.emitToolCall(namespacedRead);
+  assert.ok(!namespacedResult?.block, namespacedResult?.reason);
+  assert.equal(namespacedRead.input.path, "same.txt", "a namespaced read retains its original arguments");
   assert.match(text(await execute(session, "ls", {})), /same\.txt/);
   await execute(session, "write", { path: "nested/new.txt", content: "new\n" });
   assert.equal(readFileSync(join(target, "nested/new.txt"), "utf8"), "new\n");

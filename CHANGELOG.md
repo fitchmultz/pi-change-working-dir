@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Preserve namespaced custom-tool arguments when their names match built-in tools.
+
 ## 0.5.2 - 2026-09-22
 
 - Preserve native filesystem traversal and exact Unicode filenames across default file/search tools, `change_dir`, and `/cwd` on official Pi and the fork.
