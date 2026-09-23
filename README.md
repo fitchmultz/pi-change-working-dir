@@ -11,6 +11,8 @@ Absolute paths, `~`, and relative paths are supported. Targets must be accessibl
 
 Directory changes affect execution. Project settings, trust, AGENTS.md, skills, loaded extensions, session identity, and session storage remain attached to the original project. Use Pi's session/project controls when you intend to change those resources too.
 
+If `change_dir` fails, later tool calls in the same batch are skipped rather than running in the previous directory. The next turn can proceed normally.
+
 ## Install
 
 ```jsonc

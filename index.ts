@@ -157,6 +157,7 @@ export default function (pi: ExtensionAPI & {
   let savedDirectory: string | undefined;
   let savedStateValid = true;
   let toolsInstalled = false;
+  let failedChange = false;
   let localBash = createLocalBashOperations();
   const ownedTools = new Map<string, string>();
   const invocations = new WeakMap<object, Invocation>();
@@ -412,7 +413,11 @@ export default function (pi: ExtensionAPI & {
     initialize(ctx);
     restore(ctx);
   });
-  pi.on("agent_end", () => renderCalls.clear());
+  pi.on("turn_end", () => { failedChange = false; });
+  pi.on("agent_end", () => {
+    failedChange = false;
+    renderCalls.clear();
+  });
   pi.on("session_shutdown", (_event, ctx) => {
     if (ctx.hasUI) ctx.ui.setStatus("cwd", undefined);
     context = undefined;
@@ -445,11 +450,17 @@ export default function (pi: ExtensionAPI & {
   });
 
   pi.on("tool_call", (event, ctx) => {
+    if (failedChange) return { block: true, reason: "Skipped because change_dir failed earlier in this tool batch." };
     if ("namespace" in event && event.namespace !== undefined) return;
     initialize(ctx);
     const owner = ownedTools.get(event.toolName);
     if (owner && pi.getAllTools().find((tool) => tool.name === event.toolName)?.sourceInfo.path === owner) {
       bindInvocation(event.toolName, event.input, current(ctx));
+    }
+  });
+  pi.on("tool_execution_end", (event) => {
+    if (event.toolName === "change_dir" && !("namespace" in event && event.namespace !== undefined) && event.isError) {
+      failedChange = true;
     }
   });
 
