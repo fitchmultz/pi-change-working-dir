@@ -62,9 +62,6 @@ const accessibleDirectory = (path: string): string | undefined => {
   }
 };
 
-const sameDirectory = (left: string, right: string): boolean =>
-  left === right || (accessibleDirectory(left) ?? left) === (accessibleDirectory(right) ?? right);
-
 const assertAvailable = (cwd: string): void => {
   if (!accessibleDirectory(cwd)) {
     throw new Error(`Working directory unavailable: ${escapeControl(cwd)}. Restore it or use change_dir to select another directory.`);
@@ -191,7 +188,7 @@ export default function (pi: ExtensionAPI & {
       savedDirectory = saved;
       const target = accessibleDirectory(saved);
       if (target && escapeControl(target) === target) {
-        directory = sameDirectory(target, ctx.cwd) ? undefined : target;
+        directory = target === ctx.cwd ? undefined : target;
       } else {
         notice = `Saved working directory unavailable or unsupported; using the session directory: ${escapeControl(saved)}`;
       }
@@ -201,7 +198,7 @@ export default function (pi: ExtensionAPI & {
     recordContext(ctx, current(ctx), notice);
   };
 
-  const change = (path: unknown, ctx: ExtensionContext): string => {
+  const change = (path: unknown, ctx: ExtensionContext, reset = false): string => {
     initialize(ctx);
     if (typeof path !== "string" || !path) throw new Error("Path is required");
     const requested = operationPath(path, current(ctx));
@@ -210,7 +207,7 @@ export default function (pi: ExtensionAPI & {
     if (escapeControl(target) !== target) {
       throw new Error(`Directory paths with control characters are not supported: ${escapeControl(target)}`);
     }
-    const next = sameDirectory(target, ctx.cwd) ? undefined : target;
+    const next = reset || target === ctx.cwd ? undefined : target;
     if (next !== directory || next !== savedDirectory || !savedStateValid) {
       directory = next;
       savedDirectory = next;
@@ -220,10 +217,10 @@ export default function (pi: ExtensionAPI & {
         pi.appendEntry(ENTRY_TYPE, { dir: next });
       } finally {
         updateStatus(ctx);
-        recordContext(ctx, target, undefined, true);
+        recordContext(ctx, current(ctx), undefined, true);
       }
     }
-    return target;
+    return current(ctx);
   };
 
   const bindInvocation = (name: string, input: Record<string, unknown>, cwd: string) => {
@@ -463,7 +460,7 @@ export default function (pi: ExtensionAPI & {
     const data = entry?.type === "custom" ? entry.data as { dir?: unknown } | null : undefined;
     const saved = data?.dir;
     const target = typeof saved === "string" && isAbsolute(saved) ? accessibleDirectory(saved) : undefined;
-    const restored = target && escapeControl(target) === target && !sameDirectory(target, ctx.cwd) ? target : undefined;
+    const restored = target && escapeControl(target) === target && target !== ctx.cwd ? target : undefined;
     return restored === directory ? { sleepReady: true }
       : { sleepReady: false, reason: "Working directory differs from the selected branch restore" };
   });
@@ -492,7 +489,7 @@ export default function (pi: ExtensionAPI & {
         return;
       }
       try {
-        ctx.ui.notify(`Working directory: ${change(path === "-" ? ctx.cwd : path, ctx)}`, "info");
+        ctx.ui.notify(`Working directory: ${change(path === "-" ? ctx.cwd : path, ctx, path === "-")}`, "info");
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }
