@@ -91,9 +91,10 @@ try {
   await execute(session, "change_dir", { path: target });
   assert.equal(entries(session).length, count, "duplicate directory selection is not appended");
   const selectedEntry = entries(session).at(-1)!;
-  for (const path of ["same.txt", "@same.txt", pathToFileURL(join(target, "same.txt")).href]) {
+  for (const path of ["same.txt", pathToFileURL(join(target, "same.txt")).href]) {
     assert.match(text(await execute(session, "read", { path })), /TARGET/);
   }
+  await assert.rejects(() => execute(session, "read", { path: "@same.txt" }), { code: "ENOENT" });
   assert.match(text(await execute(session, "read", { path: join(origin, "same.txt") })), /ORIGIN/);
   const namespacedRead = { type: "tool_call" as const, toolCallId: "namespaced", toolName: "read",
     namespace: "documents", input: { path: "same.txt" } };
