@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Keep the selected working directory unchanged when trying read filename fallbacks.
 - Preserve literal leading `@` filenames in file and search tools, preventing reads and writes from targeting a different file.
 - Stop remaining tool calls in a batch after `change_dir` fails, preventing a relative write from overwriting a file in the previous directory.
 - Preserve namespaced custom-tool arguments when their names match built-in tools.
