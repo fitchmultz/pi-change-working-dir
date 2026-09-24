@@ -249,7 +249,8 @@ export default function (pi: ExtensionAPI & {
       if (!invocations.has(params)) bindInvocation(definition.name, params, current(ctx));
       const { cwd, readFallback } = invocations.get(params)!;
       assertAvailable(cwd);
-      const path = PATH_TOOLS.has(definition.name) && typeof params.path === "string" ? params.path : undefined;
+      const requestedPath = PATH_TOOLS.has(definition.name) && typeof params.path === "string" ? params.path : undefined;
+      const path = requestedPath ? operationPath(requestedPath, cwd) : requestedPath;
       try {
         signal?.throwIfAborted();
         let target: string | undefined;
@@ -296,7 +297,7 @@ export default function (pi: ExtensionAPI & {
             } });
         } else if (path) {
           if (definition.name === "read") {
-            showTarget(await readTarget(readFallback?.bound === path ? readFallback.requested : path, cwd));
+            showTarget(await readTarget(readFallback && readFallback.bound === requestedPath ? readFallback.requested : requestedPath!, cwd));
           } else {
             await stat(path);
             showTarget(await realpath(path));

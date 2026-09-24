@@ -41,6 +41,25 @@ const addressed = (suffix: string) => `${root}${sep}${suffix}`;
 
 try {
   await session.bindExtensions({ onError: error => assert.fail(error.error) });
+  // Final relative inputs still use the directory captured at admission.
+  mkdirSync(join(root, "final-path"));
+  await execute("change_dir", { path: join(root, "final-path") });
+  for (const [name, extra] of [
+    ["write", { content: "FINAL_PATH\n" }],
+    ["edit", { edits: [{ oldText: "FINAL_PATH", newText: "UPDATED_PATH" }] }],
+    ["read", {}],
+    ["ls", {}],
+  ] as const) {
+    const input = await admit(name, { path: name === "ls" ? "." : "final.txt", ...extra });
+    input.path = name === "ls" ? "." : "final.txt";
+    const result = await session.getToolDefinition(name)!.execute(name, input, undefined, undefined,
+      session.extensionRunner!.createContext());
+    if (name === "read") assert.equal(text(result), "UPDATED_PATH");
+    if (name === "ls") assert.match(text(result), /final\.txt/);
+    assert.equal(readFileSync(join(root, "final-path/final.txt"), "utf8"),
+      name === "write" ? "FINAL_PATH\n" : "UPDATED_PATH\n");
+  }
+  await execute("change_dir", { path: root });
   // The native OS is the oracle: DOS dot traversal differs from POSIX traversal.
   const traversal = `link${sep}..${sep}file.txt`;
   const physical = readFileSync(addressed(traversal), "utf8");
