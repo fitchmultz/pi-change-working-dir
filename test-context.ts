@@ -150,7 +150,8 @@ async function makeSession(reason: SessionStartEvent["reason"] = "startup", real
     streamFn: (_model, context) => {
       requests.push(structuredClone(context.messages));
       assert.ok(getCurrentSystemPrompt(context.messages).includes(unrelatedSection));
-      assert.deepEqual(getCurrentTools(context.messages).map(tool => tool.name).sort(),
+      // background_command is host-provided on the fork and already follows the bash cwd hook.
+      assert.deepEqual(getCurrentTools(context.messages).map(tool => tool.name).filter(name => name !== "background_command").sort(),
         realExtension ? ["bash", "change_dir", "edit", "read", "write"] : ["change_dir", "fresh_context", "read"]);
       const message = responses.shift() ?? fauxAssistantMessage("done");
       const stream = createAssistantMessageEventStream();
