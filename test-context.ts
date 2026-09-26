@@ -150,6 +150,7 @@ async function makeSession(reason: SessionStartEvent["reason"] = "startup", real
     streamFn: (_model, context) => {
       requests.push(structuredClone(context.messages));
       assert.ok(getCurrentSystemPrompt(context.messages).includes(unrelatedSection));
+      // The fork's host background_command follows the bash cwd hook; test-bash.ts asserts its directory.
       assert.deepEqual(getCurrentTools(context.messages).map(tool => tool.name).sort(),
         realExtension ? [...(process.env.PI_COMPAT_HOST === "fork" ? ["background_command"] : []), "bash", "change_dir", "edit", "read", "write"]
           : ["change_dir", "fresh_context", "read"]);
