@@ -1,6 +1,8 @@
 name: Pi compatibility
 
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -8,9 +10,97 @@ permissions:
   contents: read
 
 concurrency:
-  group: pi-compatibility-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PI_AUTOMATION_REF: fe049ea97a8c91d1a4c3a0958a85b37c7759dcc6 # v1.0.0
 
 jobs:
+  qualify:
+    name: ${{ matrix.os }} / Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: 24.15.0
+          - os: macos-latest
+            node: '24'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: fitchmultz/.github
+          ref: ${{ env.PI_AUTOMATION_REF }}
+          path: automation
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: extension
+          persist-credentials: false
+      # The fork tracks main because that is the build this extension must keep working with.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: fitchmultz/pi
+          ref: main
+          path: fork
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          check-latest: true
+          package-manager-cache: false
+      - name: Native search tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.sources
+          sudo apt-get update
+          sudo apt-get install -y fd-find ripgrep
+          sudo ln -sf "$(command -v fdfind)" /usr/local/bin/fd
+      - name: Native search tools (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          for tool in fd ripgrep; do
+            brew list "$tool" >/dev/null 2>&1 || brew install "$tool"
+          done
+      - name: Build fork main
+        id: fork
+        working-directory: fork
+        env:
+          PI_OFFLINE: '1'
+          PI_TELEMETRY: '0'
+        run: |
+          npm install --global "$(node -p 'require("../automation/package.json").packageManager')"
+          ref=$(git rev-parse HEAD)
+          echo "Fork ref: $ref"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          npm ci --ignore-scripts
+          npm run hydrate:model-data
+          npm run build:offline
+          node ../automation/scripts/pack-fork.mjs . "$RUNNER_TEMP/fork-package" "$ref"
+          git diff --exit-code
+      - name: Use the extension npm version
+        run: npm install --global "$(node -p 'require("./extension/package.json").packageManager')"
+      - name: Qualify official Pi
+        run: |
+          version=$(node -p 'require("./extension/package.json").devDependencies["@earendil-works/pi-coding-agent"]')
+          node automation/scripts/qualify.mjs --repo pi-change-working-dir --source "$GITHUB_WORKSPACE/extension" \
+            --host official --target "$version" --output "$RUNNER_TEMP/official-evidence"
+      - name: Qualify fork Pi
+        env:
+          PI_COMPAT_FORK_REF: ${{ steps.fork.outputs.ref }}
+        run: |
+          node automation/scripts/qualify.mjs --repo pi-change-working-dir --source "$GITHUB_WORKSPACE/extension" \
+            --host fork --target "$RUNNER_TEMP/fork-package" --output "$RUNNER_TEMP/fork-evidence"
+
   compatibility:
-    uses: ./.github/workflows/check.yml
+    name: compatibility / compatibility
+    if: always()
+    needs: qualify
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Require every lane
+        run: test "${{ needs.qualify.result }}" = success

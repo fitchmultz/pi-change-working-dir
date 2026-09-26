@@ -20,7 +20,7 @@ If `change_dir` fails, later tool calls in the same batch are skipped rather tha
 { "packages": ["git:github.com/fitchmultz/pi-change-working-dir"] }
 ```
 
-Requires official Pi 0.87.0 or a compatible fork. Development and CI cover official Pi 0.87.1 and `fitchmultz/pi`.
+Requires Node.js 24.15 or later and official Pi 0.87.0 or a compatible fork. Development and CI cover official Pi 0.87.1 and `fitchmultz/pi` `main`.
 
 ```sh
 pi update --extension git:github.com/fitchmultz/pi-change-working-dir --approve
@@ -105,13 +105,13 @@ On forks with native checkpoints, the extension certifies its branch state only 
 
 ```sh
 npm ci --ignore-scripts
-npm run check:compat
+npm run check
 ```
 
-The checks exercise real Pi loading, native path traversal and Unicode targets, non-mutating admission/previews, directory restoration, policy-await snapshots, subprocess isolation, native edit rendering, structured prompt boundaries, and native Bash settings/output/cancellation. They use deterministic provider fixtures and do not send model requests.
+The checks exercise real Pi loading, native path traversal and Unicode targets, non-mutating admission/previews, directory restoration, policy-await snapshots, subprocess isolation, native edit rendering, structured prompt boundaries, and native Bash settings/output/cancellation. They use deterministic provider fixtures and do not send model requests. `check` also rejects a lockfile containing private-registry URLs; regenerate through your registry, then point `resolved` URLs back at `https://registry.npmjs.org/`.
 
 ```sh
-PI_PACKAGE_DIR=/absolute/path/to/pi-coding-agent npm run check:compat
+PI_PACKAGE_DIR=/absolute/path/to/pi-coding-agent PI_COMPAT_HOST=fork npm test
 ```
 
-CI runs official Pi on Linux and macOS and the maintained fork on macOS, with a packed-install check and a fork checkpoint check. Native Windows filesystem comparisons have been verified separately; Windows is not part of CI or full-extension qualification.
+CI qualifies official Pi and the current fork `main` on Linux (Node 24.15, the minimum) and macOS (latest Node 24) with the shared `fitchmultz/.github` qualifier: package contracts, a fresh Git install, and the real bundled Pi CLI. The fork lane also requires native checkpoints, the Bash directory hook, and background commands. Native Windows filesystem comparisons have been verified separately; Windows is not part of CI or full-extension qualification.
