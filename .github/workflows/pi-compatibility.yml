@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pi-compatibility-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -29,8 +29,6 @@ jobs:
             node: 24.15.0
           - os: macos-latest
             node: '24'
-    env:
-      npm_config_cache: ${{ github.workspace }}/.npm-cache
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -80,7 +78,6 @@ jobs:
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
           npm ci --ignore-scripts
           npm run hydrate:model-data
-          git diff --exit-code
           npm run build:offline
           node ../automation/scripts/pack-fork.mjs . "$RUNNER_TEMP/fork-package" "$ref"
           git diff --exit-code
@@ -106,6 +103,4 @@ jobs:
     timeout-minutes: 1
     steps:
       - name: Require every lane
-        env:
-          QUALIFY: ${{ needs.qualify.result }}
-        run: test "$QUALIFY" = success
+        run: test "${{ needs.qualify.result }}" = success
