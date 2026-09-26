@@ -1,4 +1,4 @@
-/** Native CLI Bash integration: PI_PACKAGE_DIR=/path/to/pi/packages/coding-agent npm run test:bash */
+/** Native CLI Bash integration: PI_PACKAGE_DIR=/path/to/pi/packages/coding-agent node test-bash.ts */
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -77,6 +77,10 @@ try {
     assert.equal(await execute("bash", { command }), `${origin}\nkept\nproject:${origin}\n${session.sessionId}`);
     await execute("change_dir", { path: target });
     assert.equal(await execute("bash", { command }), `${target}\nkept\nproject:${target}\n${session.sessionId}`);
+    if (process.env.PI_COMPAT_HOST === "fork") {
+      const job = JSON.parse(await execute("background_command", { action: "start", command: "true" })) as { cwd: string };
+      assert.equal(job.cwd, target, "fork background commands start in the selected directory");
+    }
 
     // Reload refreshes file settings and restores the branch's selected cwd.
     savePrefix("reloaded");

@@ -151,7 +151,8 @@ async function makeSession(reason: SessionStartEvent["reason"] = "startup", real
       requests.push(structuredClone(context.messages));
       assert.ok(getCurrentSystemPrompt(context.messages).includes(unrelatedSection));
       assert.deepEqual(getCurrentTools(context.messages).map(tool => tool.name).sort(),
-        realExtension ? ["bash", "change_dir", "edit", "read", "write"] : ["change_dir", "fresh_context", "read"]);
+        realExtension ? [...(process.env.PI_COMPAT_HOST === "fork" ? ["background_command"] : []), "bash", "change_dir", "edit", "read", "write"]
+          : ["change_dir", "fresh_context", "read"]);
       const message = responses.shift() ?? fauxAssistantMessage("done");
       const stream = createAssistantMessageEventStream();
       stream.push({ type: "done", reason: message.stopReason === "toolUse" ? "toolUse" : "stop", message });

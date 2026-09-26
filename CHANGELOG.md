@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Require Node.js 24.15 or later and develop with TypeScript 7.
+- Qualify fork background commands in the selected working directory.
 - Resolve final file and search paths against the captured working directory after other extensions adjust tool inputs.
 - Keep the selected working directory unchanged when trying read filename fallbacks.
 - Preserve literal leading `@` filenames in file and search tools, preventing reads and writes from targeting a different file.
