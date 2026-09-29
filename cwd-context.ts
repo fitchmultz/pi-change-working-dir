@@ -29,11 +29,8 @@ export function registerCwdContext(
   });
 
   pi.on("context_with_system", (event, ctx) => {
-    // The fork's context_window has this public shape but is absent from official Pi's entry union.
-    const first: { type: string; id: string; firstKeptEntryId?: string } | undefined =
-      ctx.sessionManager.buildSessionProjection().entries[0]?.sourceEntry;
-    const cutoff = first?.type === "compaction" ? first.firstKeptEntryId
-      : first?.type === "context_window" ? first.id : undefined;
+    const first = ctx.sessionManager.buildSessionProjection().entries[0]?.sourceEntry;
+    const cutoff = first?.type === "compaction" ? first.firstKeptEntryId : undefined;
     let baseline: Snapshot = { cwd: ctx.cwd };
     if (cutoff) {
       for (const entry of ctx.sessionManager.getBranch()) {
