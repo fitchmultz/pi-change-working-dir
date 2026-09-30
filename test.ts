@@ -55,7 +55,7 @@ async function execute(session: Session, name: string, args: Record<string, unkn
   assert.ok(!blocked?.block, blocked?.reason);
   const definition = session.getToolDefinition(name);
   assert.ok(definition, `${name} definition exists`);
-  return definition.execute("test", input, undefined, undefined, session.extensionRunner!.createContext());
+  return definition.execute("test", input, undefined, undefined, session.extensionRunner!.createToolContext("test", undefined));
 }
 function query(api: ExtensionAPI, session: Session) {
   const request: { sessionManager: Session["sessionManager"]; result?: { cwd: string; error?: string } } = { sessionManager: session.sessionManager };
@@ -125,7 +125,7 @@ try {
   await execute(session, "change_dir", { path: other });
   releasePolicy();
   await admission;
-  await session.getToolDefinition("write")!.execute("admitted", invocation.input, undefined, undefined, session.extensionRunner!.createContext());
+  await session.getToolDefinition("write")!.execute("admitted", invocation.input, undefined, undefined, session.extensionRunner!.createToolContext("test", undefined));
   stopPolicy();
   assert.equal(readFileSync(join(target, "admitted.txt"), "utf8"), "pinned\n");
   assert.ok(!existsSync(join(other, "admitted.txt")));
@@ -168,7 +168,7 @@ try {
   await execute(session, "change_dir", { path: target });
   await session.reload();
   assert.throws(() => query(api, session), /stale/, "old event-bus API is invalidated on reload");
-  const ctx = session.extensionRunner!.createContext();
+  const ctx = session.extensionRunner!.createToolContext("test", undefined);
   assert.equal(ctx.cwd, origin);
   assert.match(text(await execute(session, "read", { path: "same.txt" })), /TARGET/);
   await execute(session, "change_dir", { path: other });

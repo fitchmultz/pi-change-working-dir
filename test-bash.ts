@@ -105,13 +105,13 @@ try {
     await assert.rejects(() => bash.execute("cancel", { command: "printf ready; sleep 30", timeout: 5 }, controller.signal, (update) => {
       if (update.content.some((block) => block.type === "text" && block.text.includes("ready"))) controller.abort();
     }), /ready[\s\S]*Command aborted/);
-    await assert.rejects(() => execute("bash", { command: "printf stdout; printf stderr >&2; exit 7" }), (error: unknown) => {
-      assert.ok(error instanceof Error);
-      assert.match(error.message, /stdout/);
-      assert.match(error.message, /stderr/);
-      assert.match(error.message, /Command exited with code 7/);
-      return true;
-    });
+    const failed = await bash.execute("exit", { command: "printf stdout; printf stderr >&2; exit 7" });
+    assert.equal(failed.isError, true);
+    const failedText = failed.content.filter((block) => block.type === "text").map((block) => block.text).join("\n");
+    assert.match(failedText, /stdout/);
+    assert.match(failedText, /stderr/);
+    assert.match(failedText, /Command exited with code 7/);
+    assert.partialDeepStrictEqual(failed.structuredContent, { exit_code: 7, truncated: false });
 
     // Stock keeps first-handler ordering; the optional hook also redirects later custom operations.
     const userCommand = 'printf "%s\\n" "$PWD" "$CWD_TEST_SHELL" "$CWD_TEST_PREFIX"';

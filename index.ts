@@ -307,7 +307,7 @@ export default function (pi: ExtensionAPI & {
         signal?.throwIfAborted();
         // File URLs bypass host Unicode-space rewriting as well as lexical traversal.
         const input = delegatedPath ? { ...params, path: delegatedPath } : params;
-        const executionContext = Object.create(ctx, { cwd: { value: cwd, enumerable: true } }) as ExtensionContext;
+        const executionContext: typeof ctx = Object.create(ctx, { cwd: { value: cwd, enumerable: true } });
         const result = await delegate.execute(id, input, signal, onUpdate, executionContext).catch((error: unknown) => {
           if (error instanceof Error && delegatedPath && path) {
             error.message = error.message.replaceAll(delegatedPath, () => target ?? path);

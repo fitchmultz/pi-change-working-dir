@@ -20,13 +20,13 @@ If `change_dir` fails, later tool calls in the same batch are skipped rather tha
 { "packages": ["git:github.com/fitchmultz/pi-change-working-dir"] }
 ```
 
-Requires Node.js 24.15 or later and official Pi 0.87.0 or a compatible fork. Development and CI cover official Pi 0.87.1 and `fitchmultz/pi` `main`.
+Requires Node.js 24.15 or later and official Pi 0.87.0 or a compatible fork. Development and CI target official Pi 0.99.1 and `fitchmultz/pi` `main`.
 
 ```sh
 pi update --extension git:github.com/fitchmultz/pi-change-working-dir --approve
 ```
 
-Restart Pi after updating extension code. For local development: `pi -e ./index.ts`.
+On current Pi, `/reload` refreshes extension code; restart after dependency changes or on older hosts. For local development: `pi -e ./index.ts`.
 
 ## Execution coverage
 
@@ -89,7 +89,7 @@ The interface is available starting with **0.5.0**. Update cooperating editor, b
 
 ## Restoration and unavailable paths
 
-The selected directory is stored on the session branch and survives resume, fork, reload, tree navigation, and compaction. Supported fork context windows preserve it too. `/cwd -` resets to the current run's original directory, including an explicit `--session-cwd` override.
+The selected directory is stored on the session branch and survives resume, fork, reload, tree navigation, and compaction. `/cwd -` resets to the current run's original directory, including an explicit `--session-cwd` override.
 
 An unavailable **saved** directory falls back to the original directory without deleting the saved selection. The model and UI receive the fallback notice. A later reload can restore the selection when the path returns.
 

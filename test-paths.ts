@@ -34,7 +34,7 @@ async function admit(name: string, input: Record<string, unknown>, id = name) {
   return input;
 }
 async function execute(name: string, input: Record<string, unknown>, signal?: AbortSignal) {
-  return session.getToolDefinition(name)!.execute(name, await admit(name, input), signal, undefined, session.extensionRunner!.createContext());
+  return session.getToolDefinition(name)!.execute(name, await admit(name, input), signal, undefined, session.extensionRunner!.createToolContext("test", undefined));
 }
 const text = (result: Awaited<ReturnType<typeof execute>>) => result.content.filter(b => b.type === "text").map(b => b.text).join("\n").trimEnd();
 const addressed = (suffix: string) => `${root}${sep}${suffix}`;
@@ -53,7 +53,7 @@ try {
     const input = await admit(name, { path: name === "ls" ? "." : "final.txt", ...extra });
     input.path = name === "ls" ? "." : "final.txt";
     const result = await session.getToolDefinition(name)!.execute(name, input, undefined, undefined,
-      session.extensionRunner!.createContext());
+      session.extensionRunner!.createToolContext("test", undefined));
     if (name === "read") assert.equal(text(result), "UPDATED_PATH");
     if (name === "ls") assert.match(text(result), /final\.txt/);
     assert.equal(readFileSync(join(root, "final-path/final.txt"), "utf8"),
@@ -152,7 +152,7 @@ try {
   writeFileSync(join(root, "fallback space.txt"), "ASCII_FALLBACK");
   for (const space of ["\u00a0", "\u2009", "\u202f", "\u3000"]) {
     assert.equal(text(await createReadToolDefinition(root).execute("native-space", { path: `fallback${space}space.txt` },
-      undefined, undefined, session.extensionRunner!.createContext())), "ASCII_FALLBACK");
+      undefined, undefined, session.extensionRunner!.createToolContext("test", undefined))), "ASCII_FALLBACK");
     assert.equal(text(await execute("read", { path: `fallback${space}space.txt` })), "ASCII_FALLBACK");
     if (process.platform !== "win32") await assert.rejects(() => execute("read", { path: `absent/../fallback${space}space.txt` }));
   }
@@ -187,7 +187,7 @@ try {
   }
 
   // Native factories retain FIFO acquisition and their publisher under held locks.
-  const ctx = session.extensionRunner!.createContext();
+  const ctx = session.extensionRunner!.createToolContext("test", undefined);
   for (const adapted of [false, true]) {
     const write = adapted ? session.getToolDefinition("write")! : createWriteToolDefinition(root);
     const edit = adapted ? session.getToolDefinition("edit")! : createEditToolDefinition(root);
@@ -298,10 +298,10 @@ try {
   assert.ok(!existsSync(join(expectedDir, "new")));
   const controller = new AbortController();
   controller.abort();
-  await assert.rejects(() => session.getToolDefinition("write")!.execute("write", pending, controller.signal, undefined, session.extensionRunner!.createContext()), /abort/i);
+  await assert.rejects(() => session.getToolDefinition("write")!.execute("write", pending, controller.signal, undefined, session.extensionRunner!.createToolContext("test", undefined)), /abort/i);
   assert.ok(!existsSync(join(root, "missing")));
   assert.ok(!existsSync(join(expectedDir, "new")));
-  await session.getToolDefinition("write")!.execute("write", pending, undefined, undefined, session.extensionRunner!.createContext());
+  await session.getToolDefinition("write")!.execute("write", pending, undefined, undefined, session.extensionRunner!.createToolContext("test", undefined));
   assert.equal(readFileSync(join(expectedDir, "new/nested/file"), "utf8"), "NEW");
   assert.equal(existsSync(join(root, "missing")), process.platform !== "win32");
 

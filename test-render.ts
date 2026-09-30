@@ -45,7 +45,7 @@ const { session } = await createAgentSession({ cwd: a, agentDir, settingsManager
 let release!: () => void;
 try {
   await session.bindExtensions({ onError: error => assert.fail(error.error) });
-  const ctx = session.extensionRunner!.createContext();
+  const ctx = session.extensionRunner!.createToolContext("test", undefined);
   await session.getToolDefinition("change_dir")!.execute("cwd", { path: b }, undefined, undefined, ctx);
   const definition = session.getToolDefinition("edit")!;
   initTheme("dark");

@@ -98,14 +98,6 @@ const factory: ExtensionFactory = pi => {
       return { content: [{ type: "text", text: args.path }], details: {} };
     },
   });
-  pi.registerTool({
-    name: "fresh_context", label: "fresh_context", description: "Start a fork context window", parameters: Type.Object({}),
-    execute: async (_id, _args, _signal, _update, ctx) => {
-      assert.ok("newContext" in ctx && typeof ctx.newContext === "function");
-      ctx.newContext({ handoff: "same-loop context boundary" });
-      return { content: [{ type: "text", text: "fresh" }], details: {} };
-    },
-  });
   // Use the real compaction lifecycle, with a fixed summary instead of a provider call.
   pi.on("session_before_compact", (_event, ctx) => ({ compaction: {
     summary: "Earlier work summarized.", firstKeptEntryId: compactFrom ?? ctx.sessionManager.getLeafId()!, tokensBefore: 100,
@@ -153,7 +145,7 @@ async function makeSession(reason: SessionStartEvent["reason"] = "startup", real
       // The fork's host background_command follows the bash cwd hook; test-bash.ts asserts its directory.
       assert.deepEqual(getCurrentTools(context.messages).map(tool => tool.name).sort(),
         realExtension ? [...(process.env.PI_COMPAT_HOST === "fork" ? ["background_command"] : []), "bash", "change_dir", "edit", "read", "write"]
-          : ["change_dir", "fresh_context", "read"]);
+          : ["change_dir", "read"]);
       const message = responses.shift() ?? fauxAssistantMessage("done");
       const stream = createAssistantMessageEventStream();
       stream.push({ type: "done", reason: message.stopReason === "toolUse" ? "toolUse" : "stop", message });
@@ -238,20 +230,13 @@ try {
   verifyFallback();
   prefix(prior);
 
-  if ("newContext" in session && typeof session.newContext === "function") {
-    session.newContext({ handoff: "keep the effective fallback" });
-    await session.prompt("fresh context after B reappeared");
-    verifyFallback();
-    prior = current();
-    await session.prompt("fresh continuation");
-    verifyFallback();
-    prefix(prior);
-    responses.push(fauxAssistantMessage(fauxToolCall("fresh_context", {}), { stopReason: "toolUse" }), fauxAssistantMessage("fresh"));
-    await session.prompt("start fresh in the same loop");
-    verifyFallback();
-    assert.ok(!current().some(message => message.role === "toolResult"));
-    checks.push("fork fresh-context and same-loop fresh-context boundaries retain the effective fallback");
-  }
+  manager.appendCompaction("", null, 100);
+  session.agent.state.messages = manager.buildSessionContext().messages;
+  await session.prompt("fallback after summary-free retain-none compaction");
+  verifyFallback();
+  assert.equal(manager.buildSessionProjection().messages.filter(message => message.role === "user").length, 1);
+  assert.ok(!current().some(message => message.role === "toolResult"));
+  checks.push("native summary-free retain-none compaction preserves the effective fallback");
   assert.deepEqual(snapshots(), historicalSnapshots);
   assert.equal(restores, restoredAt);
   assert.equal(restoreStats, statsAt);
