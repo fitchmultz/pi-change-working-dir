@@ -22,6 +22,10 @@ export function registerCwdContext(
   pi: ExtensionAPI,
   currentCwd: (ctx: ExtensionContext) => string,
 ): (ctx: ExtensionContext, cwd: string, notice?: string, changed?: boolean) => void {
+  let manager: ExtensionContext["sessionManager"] | undefined;
+  let leaf: string | null = null;
+  let baseline: Snapshot = { cwd: "" };
+
   pi.on("before_agent_start", (event, ctx) => {
     event.systemPromptOptions.cwd = currentCwd(ctx);
     // The native cwd renderer replaces backslashes, including literal POSIX filename characters.
@@ -29,17 +33,32 @@ export function registerCwdContext(
   });
 
   pi.on("context_with_system", (event, ctx) => {
-    const first = ctx.sessionManager.buildSessionProjection().entries[0]?.sourceEntry;
-    const cutoff = first?.type === "compaction" ? first.firstKeptEntryId : undefined;
-    let baseline: Snapshot = { cwd: ctx.cwd };
-    if (cutoff) {
-      for (const entry of ctx.sessionManager.getBranch()) {
-        if (entry.id === cutoff) break;
-        if (entry.type === "custom_message" && entry.customType === CONTEXT_TYPE) {
-          baseline = snapshot(entry.details) ?? baseline;
+    const nextLeaf = ctx.sessionManager.getLeafId();
+    let cursor = nextLeaf;
+    // Inspect only new ancestry. Rebuild on compaction, branch changes, or restore,
+    // never scan the entire journal on every provider request.
+    if (manager === ctx.sessionManager) {
+      while (cursor && cursor !== leaf) {
+        const entry = ctx.sessionManager.getEntry(cursor);
+        if (!entry || entry.type === "compaction") break;
+        cursor = entry.parentId;
+      }
+    }
+    if (manager !== ctx.sessionManager || cursor !== leaf) {
+      baseline = { cwd: ctx.cwd };
+      const first = ctx.sessionManager.buildSessionProjection().entries[0]?.sourceEntry;
+      const cutoff = first?.type === "compaction" ? first.firstKeptEntryId : undefined;
+      if (cutoff) {
+        for (const entry of ctx.sessionManager.getBranch()) {
+          if (entry.id === cutoff) break;
+          if (entry.type === "custom_message" && entry.customType === CONTEXT_TYPE) {
+            baseline = snapshot(entry.details) ?? baseline;
+          }
         }
       }
     }
+    manager = ctx.sessionManager;
+    leaf = nextLeaf;
     return {
       messages: event.messages.map((message, index) => {
         if (message.role === "custom" && message.customType === CONTEXT_TYPE) {

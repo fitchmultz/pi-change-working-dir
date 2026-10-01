@@ -36,7 +36,6 @@ const savePrefix = (label: string) => writeFileSync(projectSettings, JSON.string
 savePrefix("project");
 const settingsManager = SettingsManager.create(origin, agentDir);
 let userOperations: BashOperations | undefined;
-let nativeBashCwd = false;
 const loaderOptions = {
   cwd: origin, agentDir, settingsManager,
   additionalExtensionPaths: [join(process.cwd(), "index.ts")],
@@ -45,7 +44,6 @@ const loaderOptions = {
 const loader = new DefaultResourceLoader({
   ...loaderOptions,
   extensionFactories: [(pi) => {
-    nativeBashCwd = "registerBashCwdHook" in pi && typeof pi.registerBashCwdHook === "function";
     pi.on("user_bash", () => userOperations ? { operations: userOperations } : undefined);
   }],
 });
@@ -53,10 +51,7 @@ const loader = new DefaultResourceLoader({
 try {
   await loader.reload();
   assert.deepEqual(loader.getExtensions().errors, []);
-  if (process.env.PI_COMPAT_HOST === "fork") {
-    assert.equal(nativeBashCwd, true, "fork qualification requires registerBashCwdHook");
-  }
-  console.log(`Bash cwd routing: ${nativeBashCwd ? "native hook" : "official fallback"}`);
+  console.log("Bash cwd routing: public native factory and user_bash operations");
   const sessionManager = SessionManager.inMemory(origin);
   const { session } = await createAgentSession({
     cwd: origin, agentDir, settingsManager, sessionManager, resourceLoader: loader,
@@ -77,9 +72,13 @@ try {
     assert.equal(await execute("bash", { command }), `${origin}\nkept\nproject:${origin}\n${session.sessionId}`);
     await execute("change_dir", { path: target });
     assert.equal(await execute("bash", { command }), `${target}\nkept\nproject:${target}\n${session.sessionId}`);
-    if (process.env.PI_COMPAT_HOST === "fork") {
+    // Retain the distinct real-background-callee proof. Official SDK sessions do
+    // not load CLI builtins; repeat on the minimal fork's builtin host when ready.
+    if (session.getToolDefinition("background_command")) {
       const job = JSON.parse(await execute("background_command", { action: "start", command: "true" })) as { cwd: string };
-      assert.equal(job.cwd, target, "fork background commands start in the selected directory");
+      assert.equal(job.cwd, target, "background commands capture the selected directory before spawning");
+    } else {
+      console.log("Background selected-cwd proof unattempted: this SDK loadout has no background_command builtin.");
     }
 
     // Reload refreshes file settings and restores the branch's selected cwd.
@@ -113,7 +112,7 @@ try {
     assert.match(failedText, /Command exited with code 7/);
     assert.partialDeepStrictEqual(failed.structuredContent, { exit_code: 7, truncated: false });
 
-    // Stock keeps first-handler ordering; the optional hook also redirects later custom operations.
+    // Public user_bash keeps first-handler ordering; later custom operations do not replace it.
     const userCommand = 'printf "%s\\n" "$PWD" "$CWD_TEST_SHELL" "$CWD_TEST_PREFIX"';
     const runUserBash = async () => {
       const selected = await session.extensionRunner.emitUserBash({
@@ -135,7 +134,7 @@ try {
       },
     };
     assert.equal(await runUserBash(), `${target}\nkept\nreloaded:${target}`);
-    assert.equal(customCalls, nativeBashCwd ? 1 : 0);
+    assert.equal(customCalls, 0);
     userOperations = undefined;
 
     // A missing effective cwd still fails; changing to an existing directory recovers.
@@ -174,7 +173,7 @@ try {
     }));
     const customUser: BashOperations = {
       async exec(_command, cwd, { onData, onEnd }: OutputCallbacks) {
-        assert.equal(cwd, nativeBashCwd ? root : alternate);
+        assert.equal(cwd, alternate);
         onData(Buffer.from("custom-user"), "stdout");
         onEnd?.("stdout");
         onEnd?.("stderr");
@@ -217,6 +216,26 @@ try {
       session.dispose();
     }
   }
+  // Selecting another directory must not grant trust to either project's settings.
+  const untrustedOrigin = join(root, "untrusted-origin");
+  for (const directory of [untrustedOrigin, alternate]) mkdirSync(join(directory, ".pi"), { recursive: true });
+  writeFileSync(join(untrustedOrigin, ".pi/settings.json"), JSON.stringify({ shellCommandPrefix: "export CWD_TEST_PREFIX=UNTRUSTED_ORIGIN" }));
+  writeFileSync(join(alternate, ".pi/settings.json"), JSON.stringify({ shellCommandPrefix: "export CWD_TEST_PREFIX=SELECTED_PROJECT" }));
+  const untrustedSettings = SettingsManager.create(untrustedOrigin, agentDir, { projectTrusted: false });
+  const untrustedLoader = new DefaultResourceLoader({ ...loaderOptions, cwd: untrustedOrigin, settingsManager: untrustedSettings });
+  await untrustedLoader.reload({ resolveProjectTrust: async () => false });
+  assert.deepEqual(untrustedLoader.getExtensions().errors, []);
+  const untrusted = await createAgentSession({ cwd: untrustedOrigin, agentDir, settingsManager: untrustedSettings,
+    resourceLoader: untrustedLoader, sessionManager: SessionManager.inMemory(untrustedOrigin) });
+  try {
+    await untrusted.session.bindExtensions({ mode: "print", onError: error => assert.fail(error.error) });
+    const context = untrusted.session.extensionRunner!.createToolContext("trust", undefined);
+    await untrusted.session.getToolDefinition("change_dir")!.execute("select", { path: alternate }, undefined, undefined, context);
+    const result = await untrusted.session.getToolDefinition("bash")!.execute("trust",
+      { command: 'printf "%s\\n" "$PWD" "$CWD_TEST_PREFIX"' }, undefined, undefined, context);
+    assert.equal(result.content[0]?.type === "text" && result.content[0].text.trim(), `${alternate}\nglobal`);
+    assert.equal(context.isProjectTrusted(), false);
+  } finally { untrusted.session.dispose(); }
 } finally {
   if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

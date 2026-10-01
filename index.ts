@@ -13,7 +13,6 @@ import {
   type ExtensionContext,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import * as host from "@earendil-works/pi-coding-agent";
 import { accessSync, constants, lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { access, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -145,15 +144,7 @@ function queueTarget(path: string, links = new Set<string>()): string {
   } catch { return target; }
 }
 
-// Reuse each host's publisher: the fork exports its atomic publisher; official Pi
-// uses writeFile. The optional export is never required from official installations.
-const publishFile = (host as typeof host & {
-  publishLocalFile?: (path: string, content: string, signal?: AbortSignal) => Promise<void>;
-}).publishLocalFile;
-
-export default function (pi: ExtensionAPI & {
-  registerBashCwdHook?: (hook: (cwd: string) => string) => void;
-}) {
+export default function (pi: ExtensionAPI) {
   let context: ExtensionContext | undefined;
   let manager: ExtensionContext["sessionManager"] | undefined;
   let directory: string | undefined;
@@ -165,7 +156,6 @@ export default function (pi: ExtensionAPI & {
   const ownedTools = new Map<string, string>();
   const invocations = new WeakMap<object, Invocation>();
   const renderCalls = new Map<string, RenderContext>();
-  const hasNativeBashCwd = typeof pi.registerBashCwdHook === "function";
 
   const current = (ctx: ExtensionContext): string => directory ?? ctx.cwd;
   const updateStatus = (ctx: ExtensionContext) => {
@@ -277,8 +267,7 @@ export default function (pi: ExtensionAPI & {
             signal?.throwIfAborted();
             const publishedTarget = fileTarget(path);
             showTarget(publishedTarget);
-            if (publishFile) await publishFile(publishedTarget, content, signal);
-            else await writeFile(publishedTarget, content, "utf8");
+            await writeFile(publishedTarget, content, "utf8");
           };
           delegate = definition.name === "write"
             ? createWriteToolDefinition(cwd, { operations: {
@@ -417,7 +406,7 @@ export default function (pi: ExtensionAPI & {
     initialize(ctx);
     restore(ctx);
   });
-  pi.on("turn_end", () => { failedChange = false; });
+  pi.on("turn_start", () => { failedChange = false; });
   pi.on("agent_end", () => {
     failedChange = false;
     renderCalls.clear();
@@ -444,10 +433,9 @@ export default function (pi: ExtensionAPI & {
     });
   }
 
-  if (hasNativeBashCwd) pi.registerBashCwdHook!((cwd) => directory ?? cwd);
   pi.on("user_bash", (_event, ctx) => {
     initialize(ctx);
-    if (hasNativeBashCwd || !directory) return;
+    if (!directory) return;
     const cwd = current(ctx);
     assertAvailable(cwd);
     return { operations: { exec: (command, _cwd, options) => localBash.exec(command, cwd, options) } };
@@ -468,18 +456,6 @@ export default function (pi: ExtensionAPI & {
     }
   });
 
-  (pi.on as unknown as (event: "session_checkpoint", handler: (event: unknown, ctx: ExtensionContext) => {
-    sleepReady: boolean; reason?: string;
-  }) => void)("session_checkpoint", (_event, ctx) => {
-    const entry = ctx.sessionManager.getBranch().findLast((item) => item.type === "custom" && item.customType === ENTRY_TYPE);
-    const data = entry?.type === "custom" ? entry.data as { dir?: unknown } | null : undefined;
-    const saved = data?.dir;
-    const target = typeof saved === "string" && isAbsolute(saved) ? accessibleDirectory(saved) : undefined;
-    const restored = target && escapeControl(target) === target && target !== ctx.cwd ? target : undefined;
-    return restored === directory ? { sleepReady: true }
-      : { sleepReady: false, reason: "Working directory differs from the selected branch restore" };
-  });
-
   pi.registerTool({
     name: "change_dir",
     label: "Change Directory",
@@ -489,7 +465,8 @@ export default function (pi: ExtensionAPI & {
     parameters: Type.Object({ path: Type.String({ minLength: 1, description: "Directory to switch to" }) }, { additionalProperties: false }),
     constrainedSampling: { type: "json_schema", strict: "prefer" },
     executionMode: "sequential",
-    async execute(_id, params, _signal, _onUpdate, ctx) {
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      signal?.throwIfAborted();
       const cwd = change(params.path, ctx);
       return { content: [{ type: "text", text: `Working directory: ${cwd}` }], details: { cwd } };
     },

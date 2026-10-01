@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 - 2026-10-01
+
+- Require Pi 1.0.0; qualify the exact official cohort and TypeBox 1.3.27 without dropped fork checkpoint, Bash-cwd-hook, or file-publisher dependencies.
+- Preserve public native file/shell factories and read schema/output inheritance, captured cwd, queue aliases, trust isolation, and legacy journal restoration.
+- Check cancellation before changing the directory. Reset failed-batch state at turn start rather than registering an actionable no-op turn-end boundary.
+- Reuse the presentation baseline across appended ancestry; reconstruct only after compaction, branch changes, or restore, retaining system deltas and legacy snapshots.
 
 ## 0.5.3 - 2026-10-01
 

@@ -17,16 +17,16 @@ If `change_dir` fails, later tool calls in the same batch are skipped rather tha
 
 ```jsonc
 // ~/.pi/agent/settings.json
-{ "packages": ["git:github.com/fitchmultz/pi-change-working-dir"] }
+{ "packages": ["git:github.com/fitchmultz/pi-change-working-dir@v0.6.0"] }
 ```
 
-Requires Node.js 24.15 or later and official Pi 0.87.0 or a compatible fork. Development and CI target official Pi 0.99.2 and `fitchmultz/pi` `main`.
+Requires Node.js 24.15 or later and Pi 1.0.0 or later. Development uses official Pi 1.0.0 and TypeBox 1.3.27; CI also targets `fitchmultz/pi` `main`. Distribution is Git/GitHub only, not npm.
 
 ```sh
 pi update --extension git:github.com/fitchmultz/pi-change-working-dir --approve
 ```
 
-On current Pi, `/reload` refreshes extension code; restart after dependency changes or on older hosts. For local development: `pi -e ./index.ts`.
+On Pi 1.0, `/reload` refreshes extension code; restart after dependency changes. For local development: `pi -e ./index.ts`.
 
 ## Execution coverage
 
@@ -35,13 +35,13 @@ On current Pi, `/reload` refreshes extension code; restart after dependency chan
 | Default `read`, `write`, `edit`, `ls`, `grep`, `find` | Relative/default paths use the selected directory. Absolute targets remain explicit. |
 | Default `bash`, `powershell` | Native shell execution uses the invocation's captured directory. |
 | Cooperating editor, browser, and subagent extensions | Query the public interface below and capture their operation directory once. |
-| User `!` / `!!` shell | Uses the fork's native Bash hook where available; otherwise a local native-executor fallback. |
+| User `!` / `!!` shell | Uses local native `user_bash` operations with first-handler-wins ordering. |
 | Model context | Structured directory updates preserve earlier messages and tool definitions. |
 | Footer | The `cwd:` status shows the override; Pi's project segment retains its original meaning. |
 
-Default-tool adapters preserve native schemas, renderers, cancellation, truncation, and file queues. Speculative edit previews wait until the target is admitted. Already-running calls retain their captured directory if another call changes the selection.
+Default-tool adapters inherit native schemas (including the maintained fork's Read-json), renderers, cancellation, truncation, and file queues. Read-json is not implemented or copied here; its actual fork artifact must be qualified separately. Speculative edit previews wait until the target is admitted. Already-running calls retain their captured directory if another call changes the selection.
 
-Paths follow native filesystem traversal, including symlinks, `..`, trailing separators, and exact Unicode names. Native read filename fallbacks remain available. Admission and previews never create directories. Mutation validation and write-parent creation run inside Pi's existing file queue, so queued edits can follow queued file creation. The adapters retain each host's native publisher.
+Paths follow native filesystem traversal, including symlinks, `..`, trailing separators, and exact Unicode names. Native read filename fallbacks remain available. Admission and previews never create directories. Mutation validation and write-parent creation run inside Pi's existing file queue, so queued edits can follow queued file creation. Both 1.0 targets use the public local publisher (`writeFile`) inside the native queue. This is not the stronger transaction/metadata contract of `pi-apply-edits`.
 
 Custom tools, custom definitions under built-in names, and remote/sandbox executors are not replaced. They must integrate explicitly if they should follow directory changes. The extension does not patch `process.cwd()`, `child_process`, or `pi.exec`. An explicit subprocess directory always remains explicit.
 
@@ -49,7 +49,7 @@ Custom tools, custom definitions under built-in names, and remote/sandbox execut
 
 Load this extension before path-policy extensions. Default native tool paths are bound in `tool_call`, so later policy handlers inspect absolute addressed paths. POSIX traversal components remain intact; policies must not lexically collapse symlink traversal when identifying a target. Cooperating tools can bind their own paths in `prepareArguments`, before all policy handlers. This extension is not a sandbox.
 
-On official Pi, `user_bash` is first-handler-wins. An earlier custom handler retains its executor and owns its directory handling. On hook-capable forks, native Bash routing also supplies the selected directory to custom user-Bash operations. Explicit parallel wrappers and independent custom backends retain their own scheduling contracts.
+On both 1.0 targets, `user_bash` is first-handler-wins. An earlier custom handler retains its executor and owns its directory handling. Explicit parallel wrappers and independent custom backends retain their own scheduling contracts.
 
 Default adapters read the original project's CLI file settings, respecting project trust, and refresh them on reload. SDK-only in-memory shell/image settings and custom base executors are outside these file-setting adapters. A direct official SDK `session.executeBash()` call bypasses extension `user_bash`; SDK hosts should pass their own directory-aware operations or invoke the registered tool.
 
@@ -95,11 +95,11 @@ An unavailable **saved** directory falls back to the original directory without 
 
 If the **live** selected directory disappears or loses access, covered operations fail until it is restored or another accessible directory is selected. Absolute file targets do not silently bypass this recovery requirement. Validation does not promise an operating-system sandbox or atomic protection against external filesystem changes.
 
-On forks with native checkpoints, the extension certifies its branch state only when cold restoration would select the same effective directory. No second execution-directory store is created.
+The maintained 1.0 fork drops the old checkpoint, Bash-cwd-hook, and file-publisher exports. Branch recovery remains supported through native journal restoration; no second execution-directory store is created.
 
 ## Model behavior
 
-`change_dir` is an ordinary strict-schema, sequential tool. It does not require Astra-only APIs, asynchronous tool jobs, or tool discovery. Structured context updates preserve prompt prefixes on models/providers supporting mid-conversation system messages. Provider configuration and other extensions' whole-prompt overrides can affect caching; this package does not change them or promise a particular cache hit rate.
+`change_dir` is an ordinary strict-schema, sequential tool. It does not require Astra-only APIs, asynchronous tool jobs, or tool discovery. Structured context updates become native system deltas without mutating the journal. Baseline restoration inspects only newly appended ancestry on ordinary requests; full branch reconstruction occurs after compaction, branch changes, or restore. Legacy saved presentation snapshots remain readable. Structured updates preserve prompt prefixes on models/providers supporting mid-conversation system messages. Provider configuration and other extensions' whole-prompt overrides can affect caching; this package does not change them or promise a particular cache hit rate.
 
 ## Verification
 
@@ -114,4 +114,4 @@ The checks exercise real Pi loading, native path traversal and Unicode targets, 
 PI_PACKAGE_DIR=/absolute/path/to/pi-coding-agent PI_COMPAT_HOST=fork npm test
 ```
 
-CI qualifies official Pi and the current fork `main` on Linux (Node 24.15, the minimum) and macOS (latest Node 24) with the shared `fitchmultz/.github` qualifier: package contracts, a fresh Git install, and the real bundled Pi CLI. The fork lane also requires native checkpoints, the Bash directory hook, and background commands. Native Windows filesystem comparisons have been verified separately; Windows is not part of CI or full-extension qualification.
+CI qualifies official Pi and the current fork `main` on Linux (Node 24.15, the minimum) and macOS (latest Node 24) with the shared `fitchmultz/.github` qualifier: package contracts, a fresh Git install, and the real bundled Pi CLI. Dropped fork APIs are not qualification requirements. The distinct background selected-directory check remains available when a host loads its real `background_command` builtin; otherwise it reports that path unattempted. Background owners must capture the public directory-query result before awaiting spawn. The future fork's background and Read-json contracts remain unattempted until its artifact is available. Native Windows filesystem comparisons have been verified separately; Windows is not part of CI or full-extension qualification.
