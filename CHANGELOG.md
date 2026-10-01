@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## 0.5.3 - 2026-10-01
+
+- Qualify against official Pi 0.99.2 and the maintained fork using shared automation v1.0.1 and npm 12.2.0.
 - Require Node.js 24.15 or later and develop with TypeScript 7.
 - Qualify fork background commands in the selected working directory.
 - Resolve final file and search paths against the captured working directory after other extensions adjust tool inputs.

@@ -20,7 +20,7 @@ If `change_dir` fails, later tool calls in the same batch are skipped rather tha
 { "packages": ["git:github.com/fitchmultz/pi-change-working-dir"] }
 ```
 
-Requires Node.js 24.15 or later and official Pi 0.87.0 or a compatible fork. Development and CI target official Pi 0.99.1 and `fitchmultz/pi` `main`.
+Requires Node.js 24.15 or later and official Pi 0.87.0 or a compatible fork. Development and CI target official Pi 0.99.2 and `fitchmultz/pi` `main`.
 
 ```sh
 pi update --extension git:github.com/fitchmultz/pi-change-working-dir --approve
