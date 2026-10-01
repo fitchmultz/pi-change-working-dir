@@ -67,16 +67,11 @@ const entries = (session: Session) => session.sessionManager.getBranch().filter(
 
 try {
   const { session, api } = await setup();
-  const checkpointBlockers = async (activeSession: Session = session) => {
-    const runner = activeSession.extensionRunner! as typeof activeSession.extensionRunner & {
-      prepareCheckpoint(event: { type: "session_checkpoint"; boundary: "settled"; signal: AbortSignal; invalidate(): void }): Promise<string[]>;
-    };
-    assert.equal(typeof runner.prepareCheckpoint, "function");
-    return runner.prepareCheckpoint({ type: "session_checkpoint", boundary: "settled", signal: new AbortController().signal, invalidate() {} });
-  };
   assert.equal(session.getToolDefinition("change_dir")!.executionMode, "sequential");
   assert.deepEqual(session.getToolDefinition("change_dir")!.constrainedSampling, { type: "json_schema", strict: "prefer" });
   assert.equal(query(api, session)?.cwd, origin);
+  assert.deepEqual(session.getToolDefinition("read")!.parameters, createReadToolDefinition(origin).parameters,
+    "the adapter inherits the selected host's complete read schema, including host additions");
   const initialActive = api.getActiveTools();
   assert.ok(!initialActive.includes("powershell"), "wrapping defaults does not activate inactive tools");
   assert.match(text(await execute(session, "read", { path: "same.txt" })), /ORIGIN/);
@@ -85,7 +80,11 @@ try {
   symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
   await execute(session, "change_dir", { path: link });
   assert.equal(query(api, session)?.cwd, target);
-  if (process.env.PI_COMPAT_HOST === "fork") assert.deepEqual(await checkpointBlockers(), []);
+  const cancelled = new AbortController();
+  cancelled.abort();
+  await assert.rejects(() => session.getToolDefinition("change_dir")!.execute("cancelled", { path: other },
+    cancelled.signal, undefined, session.extensionRunner!.createToolContext("cancelled", undefined)), /abort/i);
+  assert.equal(query(api, session)?.cwd, target, "a cancelled change cannot alter the directory or journal");
   assert.equal(session.sessionManager.getCwd(), origin);
   const count = entries(session).length;
   await execute(session, "change_dir", { path: target });
@@ -95,6 +94,13 @@ try {
     assert.match(text(await execute(session, "read", { path })), /TARGET/);
   }
   await assert.rejects(() => execute(session, "read", { path: "@same.txt" }), { code: "ENOENT" });
+  const image = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jBfkAAAAASUVORK5CYII=", "base64");
+  writeFileSync(join(target, "pixel.png"), image);
+  const nativeImage = await createReadToolDefinition(target).execute("native-image", { path: "pixel.png" },
+    undefined, undefined, Object.create(session.extensionRunner!.createToolContext("native-image", undefined),
+      { cwd: { value: target } }));
+  assert.deepEqual((await execute(session, "read", { path: "pixel.png" })).content, nativeImage.content,
+    "the adapter preserves native binary image output rather than rewriting it");
   assert.match(text(await execute(session, "read", { path: join(origin, "same.txt") })), /ORIGIN/);
   const namespacedRead = { type: "tool_call" as const, toolCallId: "namespaced", toolName: "read",
     namespace: "documents", input: { path: "same.txt" } };
@@ -181,9 +187,6 @@ try {
   const removed = join(root, "removed"); mkdirSync(removed);
   await execute(session, "change_dir", { path: removed });
   rmSync(removed, { recursive: true });
-  if (process.env.PI_COMPAT_HOST === "fork") {
-    assert.ok((await checkpointBlockers()).some((reason) => reason.includes("Working directory differs from the selected branch restore")));
-  }
   await assert.rejects(() => execute(session, "write", { path: "new.txt", content: "no" }), /Working directory unavailable/);
   await assert.rejects(() => execute(session, "write", { path: join(other, "blocked.txt"), content: "no" }), /Working directory unavailable/);
   assert.ok(!existsSync(removed)); assert.ok(!existsSync(join(other, "blocked.txt")));
@@ -203,7 +206,6 @@ try {
   const aliased = await setup({ cwd: alias });
   await execute(aliased.session, "change_dir", { path: target });
   assert.deepEqual(query(aliased.api, aliased.session), { cwd: target });
-  if (process.env.PI_COMPAT_HOST === "fork") assert.deepEqual(await checkpointBlockers(aliased.session), []);
   await aliased.session.reload();
   rmSync(alias);
   symlinkSync(other, alias, process.platform === "win32" ? "junction" : "dir");

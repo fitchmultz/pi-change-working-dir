@@ -42,11 +42,22 @@ const selectedType = "test:selected-cwd", contextType = "change-working-dir:cont
 const fallbackNotice = "The saved directory is unavailable; using the session directory until the next restore.";
 const unrelatedSection = "An unrelated extension's instructions must survive.";
 const requests: Message[][] = [], responses: AssistantMessage[] = [], errors: ExtensionError[] = [];
+let presenting = false, presentationBranches = 0, presentationProjections = 0;
 const checks: string[] = [];
 let beforeSettle: ((ctx: ExtensionContext) => Promise<void>) | undefined;
 let active = cwd, restores = 0, restoreStats = 0, beforeStarts = 0;
 let compactFrom: string | undefined;
 const manager = SessionManager.inMemory(cwd);
+const getBranch = manager.getBranch.bind(manager);
+manager.getBranch = (...args) => {
+  if (presenting) presentationBranches++;
+  return getBranch(...args);
+};
+const buildProjection = manager.buildSessionProjection.bind(manager);
+manager.buildSessionProjection = (...args) => {
+  if (presenting) presentationProjections++;
+  return buildProjection(...args);
+};
 const selected = () => manager.getBranch().filter((entry): entry is CustomEntry<{ cwd: string }> => entry.type === "custom" && entry.customType === selectedType);
 const snapshots = () => manager.getBranch().filter((entry): entry is CustomMessageEntry<{ cwd: string; notice?: string }> => entry.type === "custom_message" && entry.customType === contextType);
 const nativeSystems = () => manager.getBranch().filter(entry => entry.type === "message" && entry.message.role === "system");
@@ -61,6 +72,7 @@ const factory: ExtensionFactory = pi => {
   });
   let originalMessages: unknown, originalCopy: unknown;
   pi.on("context_with_system", event => {
+    presenting = true;
     originalMessages = event.messages;
     originalCopy = structuredClone(event.messages);
     for (const message of event.messages) {
@@ -70,7 +82,7 @@ const factory: ExtensionFactory = pi => {
     Object.freeze(event.messages);
   });
   const record = registerCwdContext(pi, () => active);
-  pi.on("context_with_system", () => { assert.deepEqual(originalMessages, originalCopy); });
+  pi.on("context_with_system", () => { presenting = false; assert.deepEqual(originalMessages, originalCopy); });
   const restore = (ctx: ExtensionContext) => {
     restores++;
     const saved = selected().at(-1)?.data;
@@ -114,6 +126,17 @@ async function makeSession(reason: SessionStartEvent["reason"] = "startup", real
       beforeSettle = undefined;
       await callback?.(ctx);
     });
+    pi.registerTool({
+      name: "nested_cwd", label: "nested cwd", description: "Native composition fixture",
+      parameters: Type.Object({ path: Type.String() }), executionMode: "sequential",
+      async execute(_id, args, _signal, _update, ctx) {
+        const change = await ctx.executeTool("change_dir", { path: args.path });
+        const read = await ctx.executeTool("read", { path: "nested.txt" });
+        return { content: read.result.content, details: {
+          changed: change.isError, readError: read.isError, receipt: read.result.details,
+        } };
+      },
+    });
   } : factory, cwd, bus, runtime);
   const extensions = [extension];
   if (realExtension) {
@@ -142,9 +165,8 @@ async function makeSession(reason: SessionStartEvent["reason"] = "startup", real
     streamFn: (_model, context) => {
       requests.push(structuredClone(context.messages));
       assert.ok(getCurrentSystemPrompt(context.messages).includes(unrelatedSection));
-      // The fork's host background_command follows the bash cwd hook; test-bash.ts asserts its directory.
       assert.deepEqual(getCurrentTools(context.messages).map(tool => tool.name).sort(),
-        realExtension ? [...(process.env.PI_COMPAT_HOST === "fork" ? ["background_command"] : []), "bash", "change_dir", "edit", "read", "write"]
+        realExtension ? ["bash", "change_dir", "edit", "nested_cwd", "read", "write"]
           : ["change_dir", "read"]);
       const message = responses.shift() ?? fauxAssistantMessage("done");
       const stream = createAssistantMessageEventStream();
@@ -185,11 +207,14 @@ try {
   prefix(requests[1]);
   const nativeCount = nativeSystems().length, snapshotCount = snapshots().length;
   let prior = current();
+  const branchesBefore = presentationBranches, projectionsBefore = presentationProjections;
   await session.prompt("unchanged C");
   await session.prompt("/record-again");
   prefix(prior);
   assert.equal(nativeSystems().length, nativeCount);
   assert.equal(snapshots().length, snapshotCount);
+  assert.equal(presentationBranches, branchesBefore, "unchanged provider requests do not copy full cwd history");
+  assert.equal(presentationProjections, projectionsBefore, "unchanged provider requests do not rebuild cwd projection");
   checks.push("unchanged runs and repeated idle snapshots add no directory deltas");
 
   await session.prompt(`/cwd ${literal}`);
@@ -377,6 +402,25 @@ try {
   assert.equal(cwdOf(current()), third, "queued settlement commands must restore C in model context");
   assert.deepEqual(snapshots().slice(beforeSettlementSnapshots).map(entry => entry.details!.cwd), [next, third]);
   checks.push("commands between the low-level agent run and session settlement preserve queued cwd changes");
+
+  writeFileSync(join(next, "nested.txt"), "NESTED_B\n");
+  writeFileSync(join(third, "nested.txt"), "NESTED_C\n");
+  responses.push(fauxAssistantMessage(fauxToolCall("nested_cwd", { path: next }), { stopReason: "toolUse" }),
+    fauxAssistantMessage("composed"));
+  await session.prompt("compose change and read through native executeTool");
+  const composed = current().findLast((message): message is ToolResultMessage =>
+    message.role === "toolResult" && message.toolName === "nested_cwd");
+  assert.equal(composed?.isError, false);
+  assert.partialDeepStrictEqual(composed?.details, { changed: false, readError: false, receipt: { workingDirectory: next } });
+  assert.match(composed!.content[0].type === "text" ? composed!.content[0].text : "", /NESTED_B/);
+  responses.push(fauxAssistantMessage(fauxToolCall("nested_cwd", { path: join(root, "missing-nested") }), { stopReason: "toolUse" }),
+    fauxAssistantMessage("denied"));
+  await session.prompt("compose a failed directory change and dependent read");
+  const denied = current().findLast((message): message is ToolResultMessage =>
+    message.role === "toolResult" && message.toolName === "nested_cwd");
+  assert.partialDeepStrictEqual(denied?.details, { changed: true, readError: true });
+  assert.match(denied!.content[0].type === "text" ? denied!.content[0].text : "", /change_dir failed/);
+  checks.push("native nested calls capture selected cwd and deny dependent work after a failed change");
 
   assert.deepEqual(errors, []);
   console.log(`Context checks passed (${process.env.PI_PACKAGE_DIR ? "PI_PACKAGE_DIR" : "pinned package"}):\n- ${checks.join("\n- ")}`);
