@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 - 2026-10-01
 
 - Require Pi 1.0.0; qualify the exact official cohort and TypeBox 1.3.27 without dropped fork checkpoint, Bash-cwd-hook, or file-publisher dependencies.
 - Preserve public native file/shell factories and read schema/output inheritance, captured cwd, queue aliases, trust isolation, and legacy journal restoration.

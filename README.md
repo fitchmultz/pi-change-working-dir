@@ -17,7 +17,7 @@ If `change_dir` fails, later tool calls in the same batch are skipped rather tha
 
 ```jsonc
 // ~/.pi/agent/settings.json
-{ "packages": ["git:github.com/fitchmultz/pi-change-working-dir"] }
+{ "packages": ["git:github.com/fitchmultz/pi-change-working-dir@v0.6.0"] }
 ```
 
 Requires Node.js 24.15 or later and Pi 1.0.0 or later. Development uses official Pi 1.0.0 and TypeBox 1.3.27; CI also targets `fitchmultz/pi` `main`. Distribution is Git/GitHub only, not npm.
