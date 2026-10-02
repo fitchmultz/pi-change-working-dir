@@ -1,21 +1,24 @@
 /** Native CLI Bash integration: PI_PACKAGE_DIR=/path/to/pi/packages/coding-agent node test-bash.ts */
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { BashOperations } from "@earendil-works/pi-coding-agent";
+import { setTimeout as delay } from "node:timers/promises";
+import type { BashOperations, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
 type OutputCallbacks = {
   onData: (data: Buffer, source: "stdout" | "stderr") => void;
   onEnd?: (source: "stdout" | "stderr") => void;
 };
 
-const {
-  createAgentSession, createBashToolDefinition, createLocalBashOperations, defineTool, DefaultResourceLoader, SessionManager, SettingsManager,
-} = await import(process.env.PI_PACKAGE_DIR
+const host = await import(process.env.PI_PACKAGE_DIR
   ? pathToFileURL(join(process.env.PI_PACKAGE_DIR, "dist/index.js")).href
   : "@earendil-works/pi-coding-agent") as typeof import("@earendil-works/pi-coding-agent");
+const {
+  createAgentSession, createBashToolDefinition, createLocalBashOperations, defineTool, DefaultResourceLoader, SessionManager, SettingsManager,
+} = host;
+const backgroundFactory = (host as { createBackgroundCommandExtension?: () => ExtensionFactory }).createBackgroundCommandExtension;
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "cwd-bash-")));
 const origin = join(root, "origin");
@@ -25,6 +28,8 @@ const agentDir = join(root, "agent");
 for (const dir of [origin, target, alternate, agentDir]) mkdirSync(dir);
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = agentDir;
+const previousFetch = globalThis.fetch;
+globalThis.fetch = async () => { throw new Error("Bash integration tests must not make network requests"); };
 const shellPath = join(root, "configured-shell");
 writeFileSync(shellPath, '#!/bin/sh\nexport CWD_TEST_SHELL=kept\nexec /bin/bash "$@"\n', { mode: 0o700 });
 writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ shellPath, shellCommandPrefix: "export CWD_TEST_PREFIX=global" }));
@@ -45,14 +50,14 @@ const loader = new DefaultResourceLoader({
   ...loaderOptions,
   extensionFactories: [(pi) => {
     pi.on("user_bash", () => userOperations ? { operations: userOperations } : undefined);
-  }],
+  }, ...(backgroundFactory ? [backgroundFactory()] : [])],
 });
 
 try {
   await loader.reload();
   assert.deepEqual(loader.getExtensions().errors, []);
   console.log("Bash cwd routing: public native factory and user_bash operations");
-  const sessionManager = SessionManager.inMemory(origin);
+  const sessionManager = SessionManager.create(origin, join(root, "sessions"));
   const { session } = await createAgentSession({
     cwd: origin, agentDir, settingsManager, sessionManager, resourceLoader: loader,
   });
@@ -72,13 +77,28 @@ try {
     assert.equal(await execute("bash", { command }), `${origin}\nkept\nproject:${origin}\n${session.sessionId}`);
     await execute("change_dir", { path: target });
     assert.equal(await execute("bash", { command }), `${target}\nkept\nproject:${target}\n${session.sessionId}`);
-    // Retain the distinct real-background-callee proof. Official SDK sessions do
-    // not load CLI builtins; repeat on the minimal fork's builtin host when ready.
-    if (session.getToolDefinition("background_command")) {
-      const job = JSON.parse(await execute("background_command", { action: "start", command: "true" })) as { cwd: string };
-      assert.equal(job.cwd, target, "background commands capture the selected directory before spawning");
+    if (backgroundFactory) {
+      const job = JSON.parse(await execute("background_command", { action: "start", command: "sleep 0.1; pwd -P", timeout: 5 })) as {
+        id: string; cwd: string; status: string; logFile: string; exitCode?: number;
+      };
+      try {
+        assert.equal(job.cwd, target, "the real background caller captures the selected directory");
+        await execute("change_dir", { path: alternate });
+        for (let attempt = 0; attempt < 100 && ["starting", "running"].includes(job.status); attempt++) {
+          await delay(20);
+          Object.assign(job, JSON.parse(await execute("background_command", { action: "status", id: job.id })));
+        }
+        assert.equal(job.status, "succeeded");
+        assert.equal(job.exitCode, 0);
+        assert.equal(readFileSync(job.logFile, "utf8").trim(), target, "the real child executes in the captured directory after selection changes");
+      } finally {
+        const cancelled = JSON.parse(await execute("background_command", { action: "cancel", id: job.id }));
+        assert.ok(!["starting", "running"].includes(cancelled.status), "the owned job is terminal before fixture cleanup");
+        await execute("change_dir", { path: target });
+      }
+      console.log("ok: real host background child captures selected cwd and completes without a leaked job");
     } else {
-      console.log("Background selected-cwd proof unattempted: this SDK loadout has no background_command builtin.");
+      console.log("Background selected-cwd proof unattempted: the selected host does not export its background_command factory.");
     }
 
     // Reload refreshes file settings and restores the branch's selected cwd.
@@ -237,6 +257,7 @@ try {
     assert.equal(context.isProjectTrusted(), false);
   } finally { untrusted.session.dispose(); }
 } finally {
+  globalThis.fetch = previousFetch;
   if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
   rmSync(root, { recursive: true, force: true });
