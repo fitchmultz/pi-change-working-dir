@@ -33,32 +33,31 @@ Your next file and shell operations use that directory. If Pi was already runnin
 
 Paths can be absolute, relative to the current working directory, or start with `~`. Symlinks resolve to their real directory. Paths containing control characters are rejected.
 
-You can also ask Pi to switch directories for you. The extension gives it a `change_dir` tool, so a request such as “Switch to `../worktrees/feature-x` and inspect the changes” can stay in the same conversation.
+You can also ask Pi: “Switch to `../worktrees/feature-x` and inspect the changes.” It uses the extension's `change_dir` tool to make the switch.
 
-The footer's `cwd:` status shows a directory override. Pi's existing project indicator still refers to the original project.
+Look for `cwd:` in the footer to see where you're working. Pi's project indicator still shows the original project.
 
-## What follows the directory change?
+## Where it applies
 
-| Surface | Behavior |
-|---|---|
-| Default file and search tools | Relative paths for `read`, `write`, `edit`, `ls`, `grep`, and `find` use the selected directory. Absolute file paths keep their explicit target. |
-| Default shell tools | `bash` and `powershell` start in the directory captured for that call. |
-| Your `!` and `!!` shell commands | Use the selected directory through Pi's local shell handler, unless an earlier custom handler takes ownership. |
-| Cooperating extensions | Editors, browsers, and subagents can follow the selection through the [public integration interface](docs/reference.md#extension-integration). |
+The default `read`, `write`, `edit`, `ls`, `grep`, and `find` tools use the selected directory for relative paths. Absolute file paths keep their explicit target. Default `bash` and `powershell` calls start in the selected directory too. An operation already in progress keeps the directory it started with.
 
-Already-running operations keep the directory they started with. Custom tools and remote or sandbox executors need their own integration; changing directories does not automatically redirect them.
+Your `!` and `!!` shell commands follow the selection unless an earlier custom shell handler takes over. Editors, browsers, and subagents can follow it through the [integration interface](docs/reference.md#extension-integration). Custom tools and remote or sandbox executors need their own directory handling.
 
-**Your original project stays attached.** Project settings, trust, `AGENTS.md`, skills, loaded extensions, session identity, and session storage remain rooted there. Use Pi's session/project controls when you also want to change those resources.
+## Your original project stays attached
 
-If you use a path-policy extension, load this extension first so the policy sees the addressed paths. Directory selection provides no sandbox boundary. See [execution coverage and policy details](docs/reference.md#execution-coverage) for custom shell handlers and SDK hosts.
+Switching directories leaves project settings, trust, `AGENTS.md`, skills, and loaded extensions in place. Session identity and storage also stay with the original project. Use Pi's session/project controls if you want to change those resources too.
 
-## Return, resume, and recover
+If you use path-policy extensions, load this extension first so they see the addressed paths. Directory selection isn't a sandbox. The [reference](docs/reference.md#execution-coverage) covers policy ordering, custom shell handlers, and SDK hosts.
 
-The selected directory is saved on the session branch and restored after resume, fork, reload, tree navigation, and compaction. `/cwd -` returns to the current run's original directory.
+## If a directory disappears
 
-- **A saved directory is missing when you resume:** Pi falls back to the original directory and shows a notice, while retaining the saved selection. Reload after the path returns to restore it.
-- **The active directory disappears during work:** Covered operations fail until you restore it or choose another accessible directory. Absolute file paths also require this recovery.
-- **Pi's `change_dir` call fails:** Later calls in that tool batch are skipped, protecting files in the previous directory. The next turn can proceed normally.
+Pi saves the selection on the session branch, so it's restored when you resume or fork that branch. Reload, tree navigation, and compaction preserve it too.
+
+If a saved directory is missing when you resume, Pi uses the original directory and shows a notice. It keeps the saved selection; reload after the path returns to restore it.
+
+If your working directory disappears during the session, file and shell operations fail until you restore it or select another accessible directory. This also applies to absolute file paths.
+
+If Pi's `change_dir` call fails, later calls in that tool batch are skipped to protect files in the previous directory. The next turn can proceed normally.
 
 ## Update and learn more
 
@@ -68,10 +67,10 @@ pi update --extension git:github.com/fitchmultz/pi-change-working-dir --approve
 
 On Pi 1.0, `/reload` refreshes extension code; restart after dependency changes. This project is distributed through Git/GitHub.
 
-- [Reference](docs/reference.md) — tool ordering, native path behavior, extension integration, restoration, and model context.
-- [Development](docs/development.md) — local loading, test commands, and compatibility coverage.
-- [Changelog](CHANGELOG.md) — release history.
-- [Issues](https://github.com/fitchmultz/pi-change-working-dir/issues) — report a problem or suggest an improvement.
+- [Reference](docs/reference.md): tool ordering, paths, integration, and model context.
+- [Development](docs/development.md): local loading, tests, and compatibility coverage.
+- [Changelog](CHANGELOG.md): release history.
+- [Issues](https://github.com/fitchmultz/pi-change-working-dir/issues): report a problem or suggest an improvement.
 
 ## License
 
