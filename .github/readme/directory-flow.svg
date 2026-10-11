@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="640" viewBox="0 0 1600 640" role="img" aria-labelledby="title desc">
+  <title id="title">Switch worktrees and keep your Pi session</title>
+  <desc id="desc">A cwd command selects an accessible worktree. Subsequent default file, search, and shell tools use that directory. The original project retains settings, trust, instructions, session identity, and storage.</desc>
+  <defs>
+    <linearGradient id="canvas" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#060A12"/>
+      <stop offset="0.52" stop-color="#0B1120"/>
+      <stop offset="1" stop-color="#080C16"/>
+    </linearGradient>
+    <radialGradient id="blueBloom" cx="0.18" cy="0.18" r="0.8">
+      <stop stop-color="#2563EB" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#2563EB" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#172238" stop-opacity="0.96"/>
+      <stop offset="1" stop-color="#0E1525" stop-opacity="0.98"/>
+    </linearGradient>
+    <linearGradient id="focus" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#172554" stop-opacity="0.82"/>
+      <stop offset="1" stop-color="#312E81" stop-opacity="0.58"/>
+    </linearGradient>
+    <pattern id="dotGrid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="1.5" cy="1.5" r="1.2" fill="#94A3B8" fill-opacity="0.08"/>
+    </pattern>
+    <filter id="shadow" x="-15%" y="-20%" width="130%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#02040A" flood-opacity="0.45"/>
+    </filter>
+    <marker id="arrowBlue" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M1 1 11 6 1 11Z" fill="#60A5FA"/>
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M1 1 11 6 1 11Z" fill="#6EE7B7"/>
+    </marker>
+    <style>
+      .sans { font-family: Inter, ui-sans-serif, Arial, sans-serif; }
+      .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+      .heading { font: 650 32px Inter, ui-sans-serif, Arial, sans-serif; fill: #F8FAFC; }
+      .copy { font: 450 26px Inter, ui-sans-serif, Arial, sans-serif; fill: #B4C1D5; }
+      .chip { font: 650 20px "JetBrains Mono", ui-monospace, monospace; letter-spacing: 0.7px; }
+      .connector { fill: none; stroke-width: 3.5; stroke-linecap: round; }
+    </style>
+  </defs>
+
+  <!-- Solid canvas and restrained texture from the fleet's modern SVG tokens. -->
+  <rect width="1600" height="640" fill="url(#canvas)"/>
+  <rect width="1600" height="640" fill="url(#blueBloom)"/>
+  <rect width="1600" height="640" fill="url(#dotGrid)"/>
+  <text x="64" y="82" class="sans" font-size="48" font-weight="700" letter-spacing="-1.2" fill="#F8FAFC">Switch worktrees. Keep your session.</text>
+
+  <!-- The only directed edges: selection, then use by subsequent default tools. -->
+  <path d="M490 275H550" class="connector" stroke="#60A5FA" marker-end="url(#arrowBlue)"/>
+  <path d="M1030 275H1090" class="connector" stroke="#6EE7B7" marker-end="url(#arrowGreen)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="64" y="132" width="426" height="278" rx="26" fill="url(#glass)" stroke="#2A3851"/>
+    <rect x="550" y="132" width="480" height="278" rx="26" fill="url(#focus)" stroke="#6D7DFF" stroke-opacity="0.6"/>
+    <rect x="1090" y="132" width="446" height="278" rx="26" fill="url(#glass)" stroke="#2A3851"/>
+  </g>
+
+  <!-- Human command, accessible canonical selection, next-operation outcome. -->
+  <g transform="translate(94 160)">
+    <rect width="150" height="36" rx="18" fill="#172554" stroke="#3B82F6" stroke-opacity="0.55"/>
+    <text x="75" y="25" text-anchor="middle" class="chip" fill="#93C5FD">01 / CHOOSE</text>
+    <text y="91" class="heading">Choose a directory</text>
+    <text y="142" class="mono" font-size="26" fill="#BFDBFE">/cwd ../feature-x</text>
+    <text y="177" class="copy">Choose an existing folder.</text>
+    <text y="222" class="copy">Or ask Pi to change it.</text>
+  </g>
+  <g transform="translate(582 160)">
+    <rect width="150" height="36" rx="18" fill="#2E2455" stroke="#A78BFA" stroke-opacity="0.55"/>
+    <text x="75" y="25" text-anchor="middle" class="chip" fill="#DDD6FE">02 / ACTIVE</text>
+    <text y="91" class="heading">Selected worktree</text>
+    <text y="142" class="copy">Accessible path, resolved</text>
+    <text y="177" class="copy">to its real directory.</text>
+    <text y="222" class="sans" font-size="26" fill="#DDD6FE">Saved on this session branch.</text>
+  </g>
+  <g transform="translate(1122 160)">
+    <rect width="230" height="36" rx="18" fill="#12352F" stroke="#6EE7B7" stroke-opacity="0.5"/>
+    <text x="115" y="25" text-anchor="middle" class="chip" fill="#A7F3D0">03 / NEXT CALLS</text>
+    <text y="91" class="heading">Default tools</text>
+    <text y="142" class="copy">Relative file and search paths</text>
+    <text y="177" class="copy">use the selected directory.</text>
+    <text y="222" class="sans" font-size="26" fill="#A7F3D0">Shell commands start here.</text>
+  </g>
+
+  <!-- Unchanged original-project boundary; grouping does not imply a migration. -->
+  <rect x="64" y="446" width="1472" height="144" rx="24" fill="#0D1423" fill-opacity="0.85" stroke="#243148"/>
+  <text x="94" y="491" class="sans" font-size="29" font-weight="650" fill="#CBD5E1">Original project</text>
+  <rect x="94" y="511" width="600" height="50" rx="13" fill="url(#glass)"/>
+  <text x="116" y="544" class="copy">Settings · trust · AGENTS.md · skills · extensions</text>
+  <rect x="720" y="511" width="486" height="50" rx="13" fill="url(#glass)"/>
+  <text x="742" y="544" class="copy">Session identity + storage</text>
+  <rect x="1250" y="508" width="256" height="50" rx="25" fill="#12352F" stroke="#6EE7B7" stroke-opacity="0.4"/>
+  <path d="m1276 533 7 7 14-15" fill="none" stroke="#A7F3D0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="1308" y="541" class="chip" fill="#A7F3D0">STAYS ATTACHED</text>
+</svg>
