@@ -63,7 +63,7 @@
     <text x="75" y="25" text-anchor="middle" class="chip" fill="#93C5FD">01 / CHOOSE</text>
     <text y="91" class="heading">Choose a directory</text>
     <text y="142" class="mono" font-size="26" fill="#BFDBFE">/cwd ../feature-x</text>
-    <text y="177" class="copy">Choose an existing folder.</text>
+    <text y="177" class="copy">Choose an existing directory.</text>
     <text y="222" class="copy">Or ask Pi to change it.</text>
   </g>
   <g transform="translate(582 160)">
