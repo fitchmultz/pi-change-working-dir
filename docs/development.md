@@ -13,8 +13,6 @@ pi -e ./index.ts
 
 On Pi 1.0, `/reload` refreshes extension code; restart after dependency changes.
 
-The README's unpinned Git source follows the repository. For release-specific testing, the 0.6.0 Git source is `git:github.com/fitchmultz/pi-change-working-dir@v0.6.0`. A configured Git tag stays pinned when packages are updated.
-
 ## Verification
 
 ```sh
