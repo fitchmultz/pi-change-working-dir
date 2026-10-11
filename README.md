@@ -4,8 +4,6 @@ Change the working directory in [Pi](https://github.com/fitchmultz/pi) without a
 
 ![A directory change selects a worktree for subsequent file and shell tools, while the original project's settings, instructions, and session storage stay in place.](.github/readme/directory-flow.png)
 
-*Pi's default tools use the selected directory. The original project and session stay in place.*
-
 ## Install and start
 
 Use Pi 1.0.0 or later and Node.js 24.15 or later. Install the extension from GitHub. Start Pi.
