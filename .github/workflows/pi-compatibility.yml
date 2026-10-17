@@ -97,12 +97,28 @@ jobs:
           git diff --exit-code
       - name: Use the extension npm version
         run: npm install --global "$(node -p 'require("./extension/package.json").packageManager')"
-      - name: Qualify official Pi
+      - name: Qualify declared official Pi
         env:
+          PI_COMPAT_LANE_LABEL: official-declared
+        run: |
+          OFFICIAL_VERSION="$(node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { readFileSync } from "node:fs";
+          const version = JSON.parse(readFileSync("extension/package.json", "utf8")).devDependencies?.["@earendil-works/pi-coding-agent"];
+          const parts = typeof version === "string" && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(version);
+          assert.ok(parts && parts[0] === version && parts.slice(1).every(part => Number.isSafeInteger(Number(part))), "Declared official Pi must be an exact stable version");
+          console.log(version);
+          NODE
+          )"
+          node automation/scripts/qualify.mjs --repo pi-change-working-dir --source "$GITHUB_WORKSPACE/extension" \
+            --host official --target "$OFFICIAL_VERSION" --output "$RUNNER_TEMP/official-declared-evidence"
+      - name: Qualify latest official Pi
+        env:
+          PI_COMPAT_LANE_LABEL: official-latest
           OFFICIAL_VERSION: ${{ needs.resolve.outputs.official-version }}
         run: |
           node automation/scripts/qualify.mjs --repo pi-change-working-dir --source "$GITHUB_WORKSPACE/extension" \
-            --host official --target "$OFFICIAL_VERSION" --output "$RUNNER_TEMP/official-evidence"
+            --host official --target "$OFFICIAL_VERSION" --output "$RUNNER_TEMP/official-latest-evidence"
       - name: Qualify fork Pi
         env:
           PI_COMPAT_FORK_REF: ${{ needs.resolve.outputs.fork-ref }}
@@ -115,7 +131,8 @@ jobs:
         with:
           name: host-qualification-${{ matrix.os }}-${{ matrix.node }}
           path: |
-            ${{ runner.temp }}/official-evidence
+            ${{ runner.temp }}/official-declared-evidence
+            ${{ runner.temp }}/official-latest-evidence
             ${{ runner.temp }}/fork-evidence
           if-no-files-found: error
           retention-days: 3
