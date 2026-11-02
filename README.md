@@ -23,11 +23,11 @@ Enter this command in Pi. The directory must exist.
 /cwd ../worktrees/feature-x
 ```
 
-| Command | Result |
-|---|---|
-| `/cwd <path>` | Select an accessible directory. |
-| `/cwd` | Show the working directory. |
-| `/cwd -` | Return to this run's original directory. |
+| Command       | Result                                   |
+| ------------- | ---------------------------------------- |
+| `/cwd <path>` | Select an accessible directory.          |
+| `/cwd`        | Show the working directory.              |
+| `/cwd -`      | Return to this run's original directory. |
 
 Use an absolute path, a relative path, or `~`. Relative paths start at the selected directory. Pi resolves symlinks and rejects paths with control characters.
 

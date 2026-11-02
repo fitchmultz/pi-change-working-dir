@@ -5,15 +5,26 @@ const CONTEXT_TYPE = "change-working-dir:context";
 type Snapshot = { cwd: string; notice?: string };
 
 function snapshot(details: unknown): Snapshot | undefined {
-  if (!details || typeof details !== "object" || !("cwd" in details) || typeof details.cwd !== "string") return;
-  if ("notice" in details && details.notice !== undefined && typeof details.notice !== "string") return;
+  if (
+    !details ||
+    typeof details !== "object" ||
+    !("cwd" in details) ||
+    typeof details.cwd !== "string"
+  ) {
+    return;
+  }
+  if ("notice" in details && details.notice !== undefined && typeof details.notice !== "string") {
+    return;
+  }
   return details as Snapshot;
 }
 
 function sections(state: Snapshot) {
   return {
     cwd: `<cwd>\n${state.cwd}\n</cwd>`,
-    "change-working-dir": state.notice ? `<change-working-dir>\n${state.notice}\n</change-working-dir>` : null,
+    "change-working-dir": state.notice
+      ? `<change-working-dir>\n${state.notice}\n</change-working-dir>`
+      : null,
   };
 }
 
@@ -40,7 +51,9 @@ export function registerCwdContext(
     if (manager === ctx.sessionManager) {
       while (cursor && cursor !== leaf) {
         const entry = ctx.sessionManager.getEntry(cursor);
-        if (!entry || entry.type === "compaction") break;
+        if (!entry || entry.type === "compaction") {
+          break;
+        }
         cursor = entry.parentId;
       }
     }
@@ -50,7 +63,9 @@ export function registerCwdContext(
       const cutoff = first?.type === "compaction" ? first.firstKeptEntryId : undefined;
       if (cutoff) {
         for (const entry of ctx.sessionManager.getBranch()) {
-          if (entry.id === cutoff) break;
+          if (entry.id === cutoff) {
+            break;
+          }
           if (entry.type === "custom_message" && entry.customType === CONTEXT_TYPE) {
             baseline = snapshot(entry.details) ?? baseline;
           }
@@ -63,7 +78,14 @@ export function registerCwdContext(
       messages: event.messages.map((message, index) => {
         if (message.role === "custom" && message.customType === CONTEXT_TYPE) {
           const state = snapshot(message.details);
-          if (state) return { role: "system" as const, content: "", sections: sections(state), timestamp: message.timestamp };
+          if (state) {
+            return {
+              role: "system" as const,
+              content: "",
+              sections: sections(state),
+              timestamp: message.timestamp,
+            };
+          }
         }
         if (index === 0 && message.role === "system") {
           return { ...message, sections: { ...message.sections, ...sections(baseline) } };
@@ -82,8 +104,16 @@ export function registerCwdContext(
           previous = snapshot(entry.details) ?? previous;
         }
       }
-      if ((!previous && cwd === ctx.cwd && !notice) || (previous?.cwd === cwd && previous.notice === notice)) return;
+      if (
+        (!previous && cwd === ctx.cwd && !notice) ||
+        (previous?.cwd === cwd && previous.notice === notice)
+      ) {
+        return;
+      }
     }
-    pi.sendMessage({ customType: CONTEXT_TYPE, content: "", display: false, details: { cwd, notice } }, { triggerTurn: false });
+    pi.sendMessage(
+      { customType: CONTEXT_TYPE, content: "", display: false, details: { cwd, notice } },
+      { triggerTurn: false },
+    );
   };
 }

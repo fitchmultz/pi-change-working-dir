@@ -34,7 +34,7 @@ jobs:
           - os: ubuntu-latest
             node: 24.15.0
           - os: macos-latest
-            node: '24'
+            node: "24"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -84,8 +84,8 @@ jobs:
         working-directory: fork
         env:
           FORK_REF: ${{ needs.resolve.outputs.fork-ref }}
-          PI_OFFLINE: '1'
-          PI_TELEMETRY: '0'
+          PI_OFFLINE: "1"
+          PI_TELEMETRY: "0"
         run: |
           npm install --global "$(node -p 'require("../automation/package.json").packageManager')"
           echo "Fork ref: $FORK_REF"
