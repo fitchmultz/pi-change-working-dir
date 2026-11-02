@@ -4,14 +4,14 @@ For installation and everyday use, see the [README](../README.md). The [referenc
 
 ## Local development
 
-Requires Node.js 24.15 or later and Pi 1.0.0 or later. Development dependencies currently use official Pi 1.0.0 and TypeBox 1.3.34; [`package.json`](../package.json) is the source of truth for the exact versions. Distribution is Git/GitHub only, not npm.
+Requires Node.js 24.15 or later and Pi 1.5.0 or later. Development dependencies currently use official Pi 1.5.0 and TypeBox 1.3.27; [`package.json`](../package.json) is the source of truth for the exact versions. Distribution is Git/GitHub only, not npm.
 
 ```sh
 npm ci --ignore-scripts
 pi -e ./index.ts
 ```
 
-On Pi 1.0, `/reload` refreshes extension code; restart after dependency changes.
+`/reload` refreshes extension code; restart after dependency changes.
 
 ## Verification
 

@@ -28,14 +28,7 @@ import type {
 import { Type } from "typebox";
 
 import { host, loader, messages, authStorage, agentCore, ai, aiProvidersAll } from "./test-host.ts";
-const {
-  AgentSession,
-  SessionManager,
-  SettingsManager,
-  ModelRuntime,
-  createReadTool,
-  createEventBus,
-} = host;
+const { AgentSession, SessionManager, SettingsManager, ModelRuntime, createEventBus } = host;
 const { createExtensionRuntime, loadExtensionFromFactory, loadExtensions } = loader;
 const { convertToLlm } = messages;
 const { AuthStorage } = authStorage;
@@ -325,7 +318,7 @@ async function makeSession(reason: SessionStartEvent["reason"] = "startup", real
     cwd,
     modelRuntime,
     resourceLoader,
-    ...(realExtension ? {} : { baseToolsOverride: { read: createReadTool(cwd) } }),
+    ...(realExtension ? {} : { initialActiveToolNames: ["read"] }),
     extensionRunnerRef: ref,
     sessionStartEvent: { type: "session_start", reason },
   });
