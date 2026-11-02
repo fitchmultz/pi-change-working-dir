@@ -705,7 +705,11 @@ try {
 
   assert.deepEqual(errors, []);
   console.log(
-    `Context checks passed (${process.env.PI_PACKAGE_DIR !== undefined ? "PI_PACKAGE_DIR" : "pinned package"}):\n- ${checks.join("\n- ")}`,
+    `Context checks passed (${
+      process.env.PI_PACKAGE_DIR !== undefined && process.env.PI_PACKAGE_DIR !== ""
+        ? "PI_PACKAGE_DIR"
+        : "pinned package"
+    }):\n- ${checks.join("\n- ")}`,
   );
 } finally {
   session?.dispose();

@@ -18,7 +18,7 @@ import type * as MessagesModule from "./node_modules/@earendil-works/pi-coding-a
 
 /** The host package entry URL used for every cross-package import below. */
 export const packageUrl: string =
-  process.env.PI_PACKAGE_DIR !== undefined
+  process.env.PI_PACKAGE_DIR !== undefined && process.env.PI_PACKAGE_DIR !== ""
     ? pathToFileURL(join(process.env.PI_PACKAGE_DIR, "dist/index.js")).href
     : import.meta.resolve("@earendil-works/pi-coding-agent");
 
