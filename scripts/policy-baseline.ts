@@ -62,7 +62,15 @@ export const sourceProfiles: SourceProfiles = {
   profiles: [
     {
       profile: "production",
-      globs: ["index.ts", "cwd-context.ts", "scripts/**/*.ts"],
+      globs: [
+        "index.ts",
+        "cwd-context.ts",
+        "native-paths.ts",
+        "selection.ts",
+        "tool-wrapper.ts",
+        "mutation-delegate.ts",
+        "scripts/**/*.ts",
+      ],
     },
     {
       profile: "tests",
@@ -70,5 +78,14 @@ export const sourceProfiles: SourceProfiles = {
     },
   ],
   ruleAllowances: [],
-  directiveInventory: [],
+  directiveInventory: [
+    { file: "cwd-context.ts", rule: "no-param-reassign", id: "QX-001", count: 2 },
+    { file: "index.ts", rule: "no-param-reassign", id: "QX-001", count: 1 },
+    { file: "tool-wrapper.ts", rule: "no-param-reassign", id: "QX-001", count: 4 },
+    { file: "index.ts", rule: "max-params", id: "QX-002", count: 1 },
+    { file: "tool-wrapper.ts", rule: "max-params", id: "QX-002", count: 1 },
+    { file: "index.ts", rule: "no-useless-undefined", id: "QX-003", count: 1 },
+    { file: "selection.ts", rule: "no-useless-undefined", id: "QX-003", count: 1 },
+    { file: "tool-wrapper.ts", rule: "no-unsafe-type-assertion", id: "QX-004", count: 2 },
+  ],
 };

@@ -188,14 +188,14 @@ const factory: ExtensionFactory = (pi) => {
         /* Missing fixture directory. */
       }
     }
-    record(ctx, active, saved && active !== saved.cwd ? fallbackNotice : undefined);
+    record(ctx, active, { notice: saved && active !== saved.cwd ? fallbackNotice : undefined });
   };
   pi.on("session_start", (_event, ctx) => restore(ctx));
   pi.on("session_tree", (_event, ctx) => restore(ctx));
   const change = (ctx: ExtensionContext, path: string) => {
     active = path;
     pi.appendEntry(selectedType, { cwd: path });
-    record(ctx, active, undefined, true);
+    record(ctx, active, { changed: true });
   };
   pi.registerCommand("cwd", {
     description: "Select a fixture directory",

@@ -9,633 +9,292 @@ import {
   createReadToolDefinition,
   createWriteToolDefinition,
   SettingsManager,
+  type BashOperations,
   type ExtensionAPI,
   type ExtensionContext,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { accessSync, constants, lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
-import { access, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { Type } from "typebox";
-import { registerCwdContext } from "./cwd-context.ts";
+import { Type, type TSchema } from "typebox";
+import { assertAvailable, escapeControl, isRecord } from "./native-paths.ts";
+import { createSelection } from "./selection.ts";
+import { createToolBinder, type ToolBinder, type WrappedDetails } from "./tool-wrapper.ts";
 
-const ENTRY_TYPE = "change-working-dir";
 const RESOLVE_CWD = "pi-change-working-dir:resolve-execution-cwd";
 const SET_CWD = "pi-change-working-dir:set-execution-cwd";
-const DEFAULT_PATH_TOOLS = new Set(["ls", "grep", "find"]);
-const PATH_TOOLS = new Set(["read", "write", "edit", ...DEFAULT_PATH_TOOLS]);
-const UNICODE_SPACES = /[\u00a0\u2000-\u200a\u202f\u205f\u3000]/g;
 
 type DirectoryRequest = {
   sessionManager: ExtensionContext["sessionManager"];
   path?: unknown;
-  result?: { cwd: string; error?: string };
-};
-type Invocation = {
-  cwd: string;
-  readFallback: { bound: string; requested: string } | undefined;
-};
-type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2];
-
-const expandTilde = (path: string): string =>
-  path === "~"
-    ? homedir()
-    : path.startsWith("~/") || (sep === "\\" && path.startsWith("~\\"))
-      ? homedir() + sep + path.slice(2)
-      : path;
-
-const tildify = (path: string): string =>
-  path === homedir()
-    ? "~"
-    : path.startsWith(homedir() + sep)
-      ? "~" + path.slice(homedir().length)
-      : path;
-
-const escapeControl = (path: string): string =>
-  path.replace(/[\u0000-\u001f\u007f-\u009f]/g, (char) => {
-    const code = char.charCodeAt(0);
-    return code < 0x7f
-      ? JSON.stringify(char).slice(1, -1)
-      : `\\u${code.toString(16).padStart(4, "0")}`;
-  });
-
-const accessibleDirectory = (path: string): string | undefined => {
-  try {
-    if (!statSync(path).isDirectory()) {
-      return;
-    }
-    const target = realpathSync.native(path);
-    accessSync(target, constants.X_OK);
-    return target;
-  } catch {
-    return;
-  }
+  result?: { cwd: string; error?: string | undefined } | undefined;
 };
 
-const assertAvailable = (cwd: string): void => {
-  if (!accessibleDirectory(cwd)) {
-    throw new Error(
-      `Working directory unavailable: ${escapeControl(cwd)}. Restore it or use change_dir to select another directory.`,
-    );
-  }
+type InstallDeps = {
+  pi: ExtensionAPI;
+  binder: ToolBinder;
+  ctx: ExtensionContext;
+  settings: SettingsManager;
+  ownedTools: Map<string, string>;
 };
 
-const operationPath = (path: string, cwd: string): string => {
-  const expanded = path.startsWith("file://") ? fileURLToPath(path) : expandTilde(path);
-  // DOS paths normalize before lookup; POSIX traversal must reach the filesystem intact.
-  if (sep === "\\" && !/^\\\\[?.]\\/.test(expanded)) {
-    const target = resolve(cwd, expanded);
-    return /[\\/]$/.test(expanded) && !target.endsWith(sep) ? target + sep : target;
-  }
-  return isAbsolute(expanded) ? expanded : `${cwd}${sep}${expanded}`;
+type AdmissionDeps = {
+  pi: ExtensionAPI;
+  selection: ReturnType<typeof createSelection>;
+  binder: ToolBinder;
+  ownedTools: Map<string, string>;
+  gate: FailureGate;
+  shell: ShellState;
 };
 
-const bindPath = (path: unknown, cwd: string): unknown =>
-  typeof path === "string" && path ? operationPath(path, cwd) : path;
+type ShellState = {
+  configure: (settings: SettingsManager) => void;
+  operations: () => BashOperations;
+};
 
-// The hosts' read-path helper is private. Apply its ordered variants to the request
-// before binding to cwd, then validate native traversal before canonicalization.
-async function readTarget(path: string, cwd: string): Promise<string> {
-  if (path.startsWith("file://")) {
-    path = fileURLToPath(path);
-  }
-  const spaced = path.replace(UNICODE_SPACES, " ");
-  const nfd = spaced.normalize("NFD");
-  const variants = new Set([
-    path,
-    spaced,
-    spaced.replace(/ (AM|PM)\./gi, "\u202f$1."),
-    nfd,
-    spaced.replace(/'/g, "\u2019"),
-    nfd.replace(/'/g, "\u2019"),
-  ]);
-  let failure: unknown;
-  for (const variant of variants) {
-    const candidate = operationPath(variant, cwd);
-    try {
-      await stat(candidate);
-    } catch (error) {
-      failure ??= error;
-      continue;
-    }
-    return realpath(candidate);
-  }
-  throw failure;
+type FailureGate = {
+  failed: () => boolean;
+  trip: () => void;
+  reset: () => void;
+};
+
+function isDirectoryRequest(value: Record<string, unknown>): value is DirectoryRequest {
+  return "sessionManager" in value;
 }
 
-// Official Pi has no target resolver export. Keep its default publisher, but validate
-// each native parent/link before handing a canonical file URL to either host.
-function fileTarget(path: string): string {
-  const links = new Set<string>();
-  for (;;) {
-    if (path.endsWith(sep) || path.endsWith("/")) {
-      statSync(path);
-      return realpathSync.native(path);
-    }
-    const parentPath = dirname(path);
-    if (!statSync(parentPath).isDirectory()) {
-      throw Object.assign(new Error(`Not a directory: ${parentPath}`), { code: "ENOTDIR" });
-    }
-    const parent = realpathSync.native(parentPath);
-    const target = join(parent, basename(path));
-    let info;
-    try {
-      info = lstatSync(target);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-      return target;
-    }
-    if (!info.isSymbolicLink()) {
-      return realpathSync.native(target);
-    }
-    if (links.has(target)) {
-      throw Object.assign(new Error(`Symlink cycle: ${target}`), { code: "ELOOP" });
-    }
-    links.add(target);
-    const link = readlinkSync(target);
-    path = isAbsolute(link) ? link : `${parent}${sep}${link}`;
-  }
+/** The message of a thrown value, whatever shape it has. */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
-// Discover queue identity without awaiting, creating parents, or admitting invalid I/O.
-// Revisit symlinks after resolving absent components such as missing/../link.
-function queueTarget(path: string, links = new Set<string>()): string {
-  try {
-    return realpathSync.native(path);
-  } catch {
-    /* Resolve prospective parents below. */
-  }
-  const parentPath = dirname(path);
-  if (parentPath === path) {
-    return path;
-  }
-  const parent = queueTarget(parentPath, links);
-  const target = join(parent, basename(path));
-  try {
-    if (lstatSync(target).isSymbolicLink()) {
-      if (links.has(target)) {
-        return target;
-      }
-      links.add(target);
-      const link = readlinkSync(target);
-      return queueTarget(isAbsolute(link) ? link : `${parent}${sep}${link}`, links);
-    }
-    return realpathSync.native(target);
-  } catch {
-    return target;
-  }
-}
-
-export default function (pi: ExtensionAPI) {
-  let context: ExtensionContext | undefined;
-  let manager: ExtensionContext["sessionManager"] | undefined;
-  let directory: string | undefined;
-  let savedDirectory: string | undefined;
-  let savedStateValid = true;
-  let toolsInstalled = false;
-  let failedChange = false;
-  let localBash = createLocalBashOperations();
-  const ownedTools = new Map<string, string>();
-  const invocations = new WeakMap<object, Invocation>();
-  const renderCalls = new Map<string, RenderContext>();
-
-  const current = (ctx: ExtensionContext): string => directory ?? ctx.cwd;
-  const updateStatus = (ctx: ExtensionContext) => {
-    if (ctx.hasUI) {
-      ctx.ui.setStatus("cwd", directory ? `cwd: ${tildify(directory)}` : undefined);
-    }
-  };
-  const recordContext = registerCwdContext(pi, (ctx) => {
-    initialize(ctx);
-    return current(ctx);
-  });
-
-  const restore = (ctx: ExtensionContext) => {
-    directory = undefined;
-    savedDirectory = undefined;
-    savedStateValid = true;
-    const entry = ctx.sessionManager
-      .getBranch()
-      .findLast((item) => item.type === "custom" && item.customType === ENTRY_TYPE);
-    const data = entry?.type === "custom" ? entry.data : undefined;
-    const saved = data && typeof data === "object" ? (data as { dir?: unknown }).dir : undefined;
-    let notice: string | undefined;
-    if (
-      (entry && (data === null || typeof data !== "object")) ||
-      (saved !== undefined && (typeof saved !== "string" || !isAbsolute(saved)))
-    ) {
-      savedStateValid = false;
-      notice = "Ignoring an invalid saved working directory; using the session directory.";
-    } else if (typeof saved === "string") {
-      savedDirectory = saved;
-      const target = accessibleDirectory(saved);
-      if (target && escapeControl(target) === target) {
-        directory = target === ctx.cwd ? undefined : target;
-      } else {
-        notice = `Saved working directory unavailable or unsupported; using the session directory: ${escapeControl(saved)}`;
-      }
-    }
-    if (notice && ctx.hasUI) {
-      ctx.ui.notify(notice, "warning");
-    }
-    updateStatus(ctx);
-    recordContext(ctx, current(ctx), notice);
-  };
-
-  const change = (path: unknown, ctx: ExtensionContext, reset = false): string => {
-    initialize(ctx);
-    if (typeof path !== "string" || !path) {
-      throw new Error("Path is required");
-    }
-    const requested = operationPath(path, current(ctx));
-    const target = accessibleDirectory(requested);
-    if (!target) {
-      throw new Error(`Not an accessible directory: ${escapeControl(requested)}`);
-    }
-    if (escapeControl(target) !== target) {
-      throw new Error(
-        `Directory paths with control characters are not supported: ${escapeControl(target)}`,
-      );
-    }
-    const next = reset || target === ctx.cwd ? undefined : target;
-    if (next !== directory || next !== savedDirectory || !savedStateValid) {
-      directory = next;
-      savedDirectory = next;
-      savedStateValid = true;
-      // Native appends are accepted in memory before journal I/O; never retry the append.
-      try {
-        pi.appendEntry(ENTRY_TYPE, { dir: next });
-      } finally {
-        updateStatus(ctx);
-        recordContext(ctx, current(ctx), undefined, true);
-      }
-    }
-    return current(ctx);
-  };
-
-  const bindInvocation = (name: string, input: Record<string, unknown>, cwd: string) => {
-    assertAvailable(cwd);
-    const rawPath = input.path;
-    if (PATH_TOOLS.has(name)) {
-      input.path =
-        DEFAULT_PATH_TOOLS.has(name) && (input.path === undefined || input.path === "")
-          ? cwd
-          : bindPath(input.path, cwd);
-    }
-    // Keep the requested spelling so filename fallbacks never rewrite the captured cwd.
-    const readFallback =
-      name === "read" && typeof rawPath === "string" && typeof input.path === "string"
-        ? { bound: input.path, requested: rawPath }
-        : undefined;
-    invocations.set(input, { cwd, readFallback });
-  };
-
-  const wrap = (definition: ToolDefinition<any, any>): ToolDefinition<any, any> => ({
-    ...definition,
-    async execute(id, value, signal, onUpdate, ctx) {
-      if (!value || typeof value !== "object" || Array.isArray(value)) {
-        throw new Error("Expected tool arguments");
-      }
-      const params = value as Record<string, unknown>;
-      initialize(ctx);
-      if (!invocations.has(params)) {
-        bindInvocation(definition.name, params, current(ctx));
-      }
-      const { cwd, readFallback } = invocations.get(params)!;
-      assertAvailable(cwd);
-      const requestedPath =
-        PATH_TOOLS.has(definition.name) && typeof params.path === "string"
-          ? params.path
-          : undefined;
-      const path = requestedPath ? operationPath(requestedPath, cwd) : requestedPath;
-      try {
-        signal?.throwIfAborted();
-        let target: string | undefined;
-        let delegate = definition;
-        let delegatedPath: string | undefined;
-        const showTarget = (value?: string) => {
-          target = value;
-          const rendering = renderCalls.get(id);
-          if (rendering) {
-            rendering.state.workingDirectory = cwd;
-            rendering.state.workingTarget = value;
-            rendering.invalidate();
-          }
-        };
-        const mutation = definition.name === "write" || definition.name === "edit";
-        if (!path) {
-          showTarget();
-        }
-        if (path && mutation) {
-          // Factory execution registers its queue before any asynchronous preparation.
-          delegatedPath = pathToFileURL(queueTarget(path)).href;
-          if (definition.name === "edit") {
-            try {
-              statSync(path);
-              showTarget(fileTarget(path));
-            } catch {
-              /* Missing previews wait for queued validation. */
-            }
-          }
-          const publish = async (_path: string, content: string) => {
-            signal?.throwIfAborted();
-            const publishedTarget = fileTarget(path);
-            showTarget(publishedTarget);
-            await writeFile(publishedTarget, content, "utf8");
-          };
-          delegate =
-            definition.name === "write"
-              ? createWriteToolDefinition(cwd, {
-                  operations: {
-                    mkdir: async () => {
-                      await mkdir(dirname(path), { recursive: true });
-                    },
-                    writeFile: publish,
-                  },
-                })
-              : createEditToolDefinition(cwd, {
-                  operations: {
-                    access: async () => {
-                      await access(path, constants.R_OK | constants.W_OK);
-                      await stat(path);
-                      signal?.throwIfAborted();
-                      showTarget(await realpath(path));
-                    },
-                    readFile: async () => readFile(path),
-                    writeFile: publish,
-                  },
-                });
-        } else if (path) {
-          if (definition.name === "read") {
-            showTarget(
-              await readTarget(
-                readFallback && readFallback.bound === requestedPath
-                  ? readFallback.requested
-                  : requestedPath!,
-                cwd,
-              ),
-            );
-          } else {
-            await stat(path);
-            showTarget(await realpath(path));
-          }
-          delegatedPath = pathToFileURL(target!).href;
-        }
-        signal?.throwIfAborted();
-        // File URLs bypass host Unicode-space rewriting as well as lexical traversal.
-        const input = delegatedPath ? { ...params, path: delegatedPath } : params;
-        const executionContext: typeof ctx = Object.create(ctx, {
-          cwd: { value: cwd, enumerable: true },
-        });
-        const result = await delegate
-          .execute(id, input, signal, onUpdate, executionContext)
-          .catch((error: unknown) => {
-            if (error instanceof Error && delegatedPath && path) {
-              error.message = error.message.replaceAll(delegatedPath, () => target ?? path);
-            }
-            throw error;
-          });
-        // Only generated summaries/hints contain delegated URLs; never rewrite file contents.
-        if (
-          delegatedPath &&
-          target &&
-          (mutation || result.details?.truncation?.firstLineExceedsLimit)
-        ) {
-          const displayPath = mutation ? target : `'${target.replaceAll("'", "'\\''")}'`;
-          result.content = result.content.map((block) =>
-            block.type === "text"
-              ? { ...block, text: block.text.replaceAll(delegatedPath, () => displayPath) }
-              : block,
-          );
-          const header = `--- ${delegatedPath}\n+++ ${delegatedPath}\n`;
-          if (
-            typeof result.details?.patch === "string" &&
-            result.details.patch.startsWith(header)
-          ) {
-            result.details.patch = `--- ${target}\n+++ ${target}\n${result.details.patch.slice(header.length)}`;
-          }
-        }
-        return {
-          ...result,
-          details: {
-            ...result.details,
-            workingDirectory: cwd,
-            ...(path ? { workingPath: path, workingTarget: target } : {}),
-          },
-        };
-      } finally {
-        renderCalls.delete(id);
-      }
+/** Tracks whether a change_dir failure should block the rest of its tool batch. */
+function createFailureGate(): FailureGate {
+  let failed = false;
+  return {
+    failed: () => failed,
+    trip: () => {
+      failed = true;
     },
-    ...(definition.renderCall
-      ? {
-          renderCall(args, theme, ctx: RenderContext) {
-            if (!ctx.state.workingDirectory) {
-              renderCalls.set(ctx.toolCallId, ctx);
-            }
-            // Native edit uses path for preview I/O and the legacy alias for its label.
-            const bound =
-              ctx.state.workingTarget && args && typeof args === "object"
-                ? {
-                    ...args,
-                    path:
-                      definition.name === "edit"
-                        ? pathToFileURL(ctx.state.workingTarget).href
-                        : ctx.state.workingTarget,
-                    file_path: ctx.state.workingTarget,
-                  }
-                : args;
-            return definition.renderCall!(bound, theme, {
-              ...ctx,
-              cwd: ctx.state.workingDirectory ?? ctx.cwd,
-              invalidate() {
-                const preview = definition.name === "edit" && ctx.state.callComponent?.preview;
-                if (typeof preview?.error === "string" && ctx.state.workingTarget) {
-                  preview.error = preview.error.replaceAll(
-                    pathToFileURL(ctx.state.workingTarget).href,
-                    () => ctx.state.workingTarget,
-                  );
-                }
-                ctx.invalidate();
-              },
-              // Argument completion precedes native preflight; don't preview the wrong file.
-              argsComplete: ctx.argsComplete && Boolean(ctx.state.workingDirectory),
-            });
-          },
-        }
-      : {}),
-    ...(definition.renderResult
-      ? {
-          renderResult(result, options, theme, ctx: RenderContext) {
-            const details = result.details as
-              | { workingDirectory?: string; workingPath?: string; workingTarget?: string }
-              | undefined;
-            if (details?.workingDirectory) {
-              ctx.state.workingDirectory = details.workingDirectory;
-              ctx.state.workingTarget = details.workingTarget ?? details.workingPath;
-            }
-            renderCalls.delete(ctx.toolCallId);
-            return definition.renderResult!(result, options, theme, {
-              ...ctx,
-              cwd: ctx.state.workingDirectory ?? ctx.cwd,
-              args:
-                ctx.state.workingTarget && ctx.args && typeof ctx.args === "object"
-                  ? {
-                      ...ctx.args,
-                      path:
-                        definition.name === "edit"
-                          ? pathToFileURL(ctx.state.workingTarget).href
-                          : ctx.state.workingTarget,
-                      file_path: ctx.state.workingTarget,
-                    }
-                  : ctx.args,
-            });
-          },
-        }
-      : {}),
-  });
-
-  const installTools = (ctx: ExtensionContext) => {
-    if (toolsInstalled) {
-      return;
-    }
-    toolsInstalled = true;
-    const settings = SettingsManager.create(ctx.cwd, undefined, {
-      projectTrusted: ctx.isProjectTrusted(),
-    });
-    const shellPath = settings.getShellPath();
-    const commandPrefix = settings.getShellCommandPrefix();
-    localBash =
-      shellPath === undefined
-        ? createLocalBashOperations()
-        : createLocalBashOperations({ shellPath });
-    const definitions = [
-      createReadToolDefinition(ctx.cwd, { autoResizeImages: settings.getImageAutoResize() }),
-      createWriteToolDefinition(ctx.cwd),
-      createEditToolDefinition(ctx.cwd),
-      createLsToolDefinition(ctx.cwd),
-      createFindToolDefinition(ctx.cwd),
-      createGrepToolDefinition(ctx.cwd),
-      createBashToolDefinition(ctx.cwd, {
-        ...(shellPath === undefined ? {} : { shellPath }),
-        ...(commandPrefix === undefined ? {} : { commandPrefix }),
-      }),
-      createPowerShellToolDefinition(ctx.cwd),
-    ];
-    const nativeTools = new Set(
-      pi
-        .getAllTools()
-        .filter((tool) => tool.sourceInfo.source === "builtin")
-        .map((tool) => tool.name),
-    );
-    const activeTools = pi.getActiveTools();
-    for (const definition of definitions) {
-      if (!nativeTools.has(definition.name)) {
-        continue;
-      }
-      pi.registerTool(wrap(definition));
-      const installed = pi.getAllTools().find((tool) => tool.name === definition.name);
-      if (installed) {
-        ownedTools.set(definition.name, installed.sourceInfo.path);
-      }
-    }
-    pi.setActiveTools(activeTools);
+    reset: () => {
+      failed = false;
+    },
   };
+}
 
-  function initialize(ctx: ExtensionContext) {
-    context = ctx;
-    if (manager === ctx.sessionManager) {
-      return;
-    }
-    manager = ctx.sessionManager;
-    installTools(ctx);
-    restore(ctx);
+/** The shell operations user_bash rebinds to the selected directory. */
+function createShellState(): ShellState {
+  let operations = createLocalBashOperations();
+  return {
+    configure: (settings: SettingsManager) => {
+      const shellPath = settings.getShellPath();
+      operations =
+        shellPath === undefined
+          ? createLocalBashOperations()
+          : createLocalBashOperations({ shellPath });
+    },
+    operations: () => operations,
+  };
+}
+
+/** Wrap and register one native tool, tracking the source it was installed from. */
+function registerWrapped<TParams extends TSchema, TDetails extends WrappedDetails, TState>(
+  pi: ExtensionAPI,
+  binder: ToolBinder,
+  definition: ToolDefinition<TParams, TDetails, TState>,
+  ownedTools: Map<string, string>,
+): void {
+  pi.registerTool(binder.wrap(definition));
+  const installed = pi.getAllTools().find((tool) => tool.name === definition.name);
+  if (installed !== undefined) {
+    ownedTools.set(definition.name, installed.sourceInfo.path);
   }
+}
 
+/** The wrapped native tools, each installed under its own concrete type. */
+function nativeDefinitions(deps: InstallDeps): { name: string; install: () => void }[] {
+  const { pi, binder, ctx, settings, ownedTools } = deps;
+  const shellPath = settings.getShellPath();
+  const commandPrefix = settings.getShellCommandPrefix();
+  return [
+    {
+      name: "read",
+      install: () =>
+        registerWrapped(
+          pi,
+          binder,
+          createReadToolDefinition(ctx.cwd, { autoResizeImages: settings.getImageAutoResize() }),
+          ownedTools,
+        ),
+    },
+    {
+      name: "write",
+      install: () => registerWrapped(pi, binder, createWriteToolDefinition(ctx.cwd), ownedTools),
+    },
+    {
+      name: "edit",
+      install: () => registerWrapped(pi, binder, createEditToolDefinition(ctx.cwd), ownedTools),
+    },
+    {
+      name: "ls",
+      install: () => registerWrapped(pi, binder, createLsToolDefinition(ctx.cwd), ownedTools),
+    },
+    {
+      name: "find",
+      install: () => registerWrapped(pi, binder, createFindToolDefinition(ctx.cwd), ownedTools),
+    },
+    {
+      name: "grep",
+      install: () => registerWrapped(pi, binder, createGrepToolDefinition(ctx.cwd), ownedTools),
+    },
+    {
+      name: "bash",
+      install: () =>
+        registerWrapped(
+          pi,
+          binder,
+          createBashToolDefinition(ctx.cwd, {
+            ...(shellPath === undefined ? {} : { shellPath }),
+            ...(commandPrefix === undefined ? {} : { commandPrefix }),
+          }),
+          ownedTools,
+        ),
+    },
+    {
+      name: "powershell",
+      install: () =>
+        registerWrapped(pi, binder, createPowerShellToolDefinition(ctx.cwd), ownedTools),
+    },
+  ];
+}
+
+/** Installs the wrapped native tools once, preserving the active tool set. */
+function createInstaller(
+  pi: ExtensionAPI,
+  binder: ToolBinder,
+  ownedTools: Map<string, string>,
+  shell: ShellState,
+): { install: (ctx: ExtensionContext) => void } {
+  let toolsInstalled = false;
+  return {
+    install: (ctx: ExtensionContext) => {
+      if (toolsInstalled) {
+        return;
+      }
+      toolsInstalled = true;
+      const settings = SettingsManager.create(ctx.cwd, undefined, {
+        projectTrusted: ctx.isProjectTrusted(),
+      });
+      shell.configure(settings);
+      const nativeTools = new Set(
+        pi
+          .getAllTools()
+          .filter((tool) => tool.sourceInfo.source === "builtin")
+          .map((tool) => tool.name),
+      );
+      const activeTools = pi.getActiveTools();
+      for (const definition of nativeDefinitions({ pi, binder, ctx, settings, ownedTools })) {
+        if (nativeTools.has(definition.name)) {
+          definition.install();
+        }
+      }
+      pi.setActiveTools(activeTools);
+    },
+  };
+}
+
+/** Session lifecycle: rebind on switch, restore on reuse, clear status on shutdown. */
+function registerLifecycle(
+  pi: ExtensionAPI,
+  selection: ReturnType<typeof createSelection>,
+  binder: ToolBinder,
+  gate: FailureGate,
+): void {
   pi.on("session_start", (_event, ctx) => {
-    const initialized = manager === ctx.sessionManager;
-    initialize(ctx);
+    const initialized = selection.context()?.sessionManager === ctx.sessionManager;
+    selection.initialize(ctx);
     if (initialized) {
-      restore(ctx);
+      selection.restore(ctx);
     }
   });
   pi.on("session_tree", (_event, ctx) => {
-    initialize(ctx);
-    restore(ctx);
+    selection.initialize(ctx);
+    selection.restore(ctx);
   });
   pi.on("turn_start", () => {
-    failedChange = false;
+    gate.reset();
   });
   pi.on("agent_end", () => {
-    failedChange = false;
-    renderCalls.clear();
+    gate.reset();
+    binder.dispose();
   });
   pi.on("session_shutdown", (_event, ctx) => {
     if (ctx.hasUI) {
+      // oxlint-disable-next-line no-useless-undefined -- QX-003: the host status API takes a required string | undefined slot value.
       ctx.ui.setStatus("cwd", undefined);
     }
-    context = undefined;
-    manager = undefined;
-    renderCalls.clear();
+    selection.reset();
+    binder.dispose();
   });
+}
 
+/** The resolve/set channels cooperating extensions use to join the selected directory. */
+function registerChannels(pi: ExtensionAPI, selection: ReturnType<typeof createSelection>): void {
   for (const event of [RESOLVE_CWD, SET_CWD]) {
     pi.events.on(event, (value) => {
-      if (!value || typeof value !== "object" || !context) {
+      const ctx = selection.context();
+      if (!isRecord(value) || !isDirectoryRequest(value) || ctx === undefined) {
         return;
       }
-      const request = value as DirectoryRequest;
-      if (request.sessionManager !== manager) {
+      const request = value;
+      if (request.sessionManager !== ctx.sessionManager) {
         return;
       }
+      let outcome: { cwd: string; error?: string | undefined };
       try {
-        const cwd = event === SET_CWD ? change(request.path, context) : current(context);
+        const cwd =
+          event === SET_CWD ? selection.change(request.path, ctx) : selection.current(ctx);
         assertAvailable(cwd);
-        request.result = { cwd };
+        outcome = { cwd };
       } catch (error) {
-        request.result = {
-          cwd: current(context),
-          error: error instanceof Error ? error.message : String(error),
-        };
+        outcome = { cwd: selection.current(ctx), error: errorMessage(error) };
       }
+      // oxlint-disable-next-line no-param-reassign -- QX-001: the channel contract delivers results by assigning request.result.
+      request.result = outcome;
     });
   }
+}
 
+/** Admission hooks: bash rebinds, owned tools capture invocations, failures gate batches. */
+function registerAdmission(deps: AdmissionDeps): void {
+  const { pi, selection, binder, ownedTools, gate, shell } = deps;
   pi.on("user_bash", (_event, ctx) => {
-    initialize(ctx);
-    if (directory === undefined) {
-      return undefined;
+    selection.initialize(ctx);
+    const cwd = selection.current(ctx);
+    if (cwd === ctx.cwd) {
+      return;
     }
-    const cwd = current(ctx);
     assertAvailable(cwd);
     return {
-      operations: { exec: (command, _cwd, options) => localBash.exec(command, cwd, options) },
+      operations: {
+        exec: (command, _cwd, options) => shell.operations().exec(command, cwd, options),
+      },
     };
   });
-
   pi.on("tool_call", (event, ctx) => {
-    if (failedChange) {
+    if (gate.failed()) {
       return {
         block: true,
         reason: "Skipped because change_dir failed earlier in this tool batch.",
       };
     }
     if ("namespace" in event && event.namespace !== undefined) {
-      return undefined;
+      return;
     }
-    initialize(ctx);
+    selection.initialize(ctx);
     const owner = ownedTools.get(event.toolName);
-    if (
-      owner &&
-      pi.getAllTools().find((tool) => tool.name === event.toolName)?.sourceInfo.path === owner
-    ) {
-      bindInvocation(event.toolName, event.input, current(ctx));
+    const installed = pi.getAllTools().find((tool) => tool.name === event.toolName);
+    if (owner !== undefined && installed?.sourceInfo.path === owner) {
+      binder.bind(event.toolName, event.input, selection.current(ctx));
     }
-    return undefined;
+    return;
   });
   pi.on("tool_execution_end", (event) => {
     if (
@@ -643,10 +302,13 @@ export default function (pi: ExtensionAPI) {
       !("namespace" in event && event.namespace !== undefined) &&
       event.isError
     ) {
-      failedChange = true;
+      gate.trip();
     }
   });
+}
 
+/** The change_dir tool that rebinds subsequent tool calls to the selected directory. */
+function registerChangeDir(pi: ExtensionAPI, selection: ReturnType<typeof createSelection>): void {
   pi.registerTool({
     name: "change_dir",
     label: "Change Directory",
@@ -662,32 +324,56 @@ export default function (pi: ExtensionAPI) {
     ),
     constrainedSampling: { type: "json_schema", strict: "prefer" },
     executionMode: "sequential",
+    // oxlint-disable-next-line max-params -- QX-002: the host tool execute signature fixes five positional parameters.
     async execute(_id, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
-      const cwd = change(params.path, ctx);
+      const cwd = selection.change(params.path, ctx);
       return { content: [{ type: "text", text: `Working directory: ${cwd}` }], details: { cwd } };
     },
   });
+}
+
+/** The /cwd command: show the current selection or switch and reset it. */
+function registerCwdCommand(pi: ExtensionAPI, selection: ReturnType<typeof createSelection>): void {
   pi.registerCommand("cwd", {
     description: "Show or change the working directory: /cwd [path|-]",
     async handler(args, ctx) {
-      initialize(ctx);
+      selection.initialize(ctx);
       const path = args.trim();
-      if (!path) {
+      if (path === "") {
+        const suffix =
+          selection.current(ctx) === ctx.cwd ? "" : ` (session: ${escapeControl(ctx.cwd)})`;
         ctx.ui.notify(
-          `Working directory: ${escapeControl(current(ctx))}${directory ? ` (session: ${escapeControl(ctx.cwd)})` : ""}`,
+          `Working directory: ${escapeControl(selection.current(ctx))}${suffix}`,
           "info",
         );
         return;
       }
       try {
         ctx.ui.notify(
-          `Working directory: ${change(path === "-" ? ctx.cwd : path, ctx, path === "-")}`,
+          `Working directory: ${selection.change(path === "-" ? ctx.cwd : path, ctx, path === "-")}`,
           "info",
         );
       } catch (error) {
-        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+        ctx.ui.notify(errorMessage(error), "error");
       }
     },
   });
+}
+
+export default function (pi: ExtensionAPI): void {
+  const ownedTools = new Map<string, string>();
+  const gate = createFailureGate();
+  const shell = createShellState();
+  const selection = createSelection(pi, (ctx) => {
+    installer.install(ctx);
+    selection.restore(ctx);
+  });
+  const binder = createToolBinder(selection);
+  const installer = createInstaller(pi, binder, ownedTools, shell);
+  registerLifecycle(pi, selection, binder, gate);
+  registerChannels(pi, selection);
+  registerAdmission({ pi, selection, binder, ownedTools, gate, shell });
+  registerChangeDir(pi, selection);
+  registerCwdCommand(pi, selection);
 }

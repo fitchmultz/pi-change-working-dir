@@ -133,6 +133,11 @@ try {
       await execute("bash", { command }),
       `${origin}\nkept\nproject:${origin}\n${session.sessionId}`,
     );
+    assert.equal(
+      await execute("bash", { command: 'printf "%s"', path: "/definitely/not/here" }),
+      "(no output)",
+      "a stray path argument on a shell tool is ignored, not resolved",
+    );
     await execute("change_dir", { path: target });
     assert.equal(
       await execute("bash", { command }),

@@ -163,7 +163,7 @@ function checkDirectiveComment(
   if (!/(?:eslint|oxlint)-disable|@(?:ts-ignore|ts-expect-error|ts-nocheck|ts-check)/.test(body)) {
     return 0;
   }
-  const authorized = /^oxlint-disable-next-line\s+(\S+)\s+--\s+(QX-\d+)\b/.exec(body);
+  const authorized = /^\/\*?\/?\s*oxlint-disable-next-line\s+(\S+)\s+--\s+(QX-\d+)\b/.exec(body);
   if (authorized === null) {
     problems.push(`${file}: unauthorized suppression directive: ${body.trim()}`);
     return 1;
