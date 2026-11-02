@@ -97,12 +97,12 @@ export async function readTarget(requested: string, cwd: string): Promise<string
   for (const variant of variants) {
     const candidate = operationPath(variant, cwd);
     try {
-      await stat(candidate);
+      const [, resolved] = await Promise.all([stat(candidate), realpath(candidate)]);
+      return resolved;
     } catch (error) {
       failure ??= error;
       continue;
     }
-    return realpath(candidate);
   }
   throw firstFailure(failure, requested);
 }
