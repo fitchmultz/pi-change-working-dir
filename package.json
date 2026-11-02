@@ -27,9 +27,16 @@
   "scripts": {
     "test": "node --test --test-concurrency=1 \"test*.ts\"",
     "typecheck": "tsc",
+    "lint": "oxlint --deny-warnings .",
+    "lint:agent": "oxlint --deny-warnings --format=agent .",
+    "lint:fix": "oxlint --fix .",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "policy:check": "node scripts/check-policy.ts",
     "check:lock": "node -e \"process.exit(/workos|socket-firewall/i.test(require('fs').readFileSync('package-lock.json','utf8')) ? 1 : 0)\"",
-    "check": "npm run check:lock && npm run typecheck && npm test && npm pack --dry-run",
-    "check:compat": "npm run check",
+    "pack:check": "npm pack --dry-run",
+    "check": "node scripts/run-gates.ts check:lock policy:check format:check typecheck test pack:check",
+    "check:compat": "node scripts/run-gates.ts check:lock policy:check format:check typecheck test",
     "prepublishOnly": "npm run check"
   },
   "engines": {
@@ -58,6 +65,10 @@
     "@earendil-works/pi-ai": "1.0.0",
     "@earendil-works/pi-coding-agent": "1.0.0",
     "@types/node": "24.19.1",
+    "oxc-parser": "0.156.0",
+    "oxfmt": "0.75.0",
+    "oxlint": "1.90.0",
+    "oxlint-tsgolint": "7.0.2005",
     "typebox": "1.3.34",
     "typescript": "7.0.2"
   }

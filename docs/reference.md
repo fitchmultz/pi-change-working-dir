@@ -15,14 +15,14 @@ If `change_dir` fails, later tool calls in the same batch are skipped rather tha
 
 ## Execution coverage
 
-| Surface | Directory behavior |
-|---|---|
-| Default `read`, `write`, `edit`, `ls`, `grep`, `find` | Relative/default paths use the selected directory. Absolute targets remain explicit. |
-| Default `bash`, `powershell` | Native shell execution uses the invocation's captured directory. |
-| Cooperating editor, browser, and subagent extensions | Query the public interface below and capture their operation directory once. |
-| User `!` / `!!` shell | Uses local native `user_bash` operations with first-handler-wins ordering. |
-| Model context | Structured directory updates preserve earlier messages and tool definitions. |
-| Footer | The `cwd:` status shows the override; Pi's project segment retains its original meaning. |
+| Surface                                               | Directory behavior                                                                       |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Default `read`, `write`, `edit`, `ls`, `grep`, `find` | Relative/default paths use the selected directory. Absolute targets remain explicit.     |
+| Default `bash`, `powershell`                          | Native shell execution uses the invocation's captured directory.                         |
+| Cooperating editor, browser, and subagent extensions  | Query the public interface below and capture their operation directory once.             |
+| User `!` / `!!` shell                                 | Uses local native `user_bash` operations with first-handler-wins ordering.               |
+| Model context                                         | Structured directory updates preserve earlier messages and tool definitions.             |
+| Footer                                                | The `cwd:` status shows the override; Pi's project segment retains its original meaning. |
 
 Default-tool adapters inherit native schemas (including the maintained Pi host's Read-json), renderers, cancellation, truncation, and file queues. Read-json is not implemented or copied here; its actual host artifact must be qualified separately. Speculative edit previews wait until the target is admitted. Already-running calls retain their captured directory if another call changes the selection.
 

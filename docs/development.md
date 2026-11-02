@@ -20,7 +20,9 @@ npm ci --ignore-scripts
 npm run check
 ```
 
-The checks exercise real Pi loading, native path traversal and Unicode targets, non-mutating admission/previews, directory restoration, policy-await snapshots, subprocess isolation, native edit rendering, structured prompt boundaries, and native Bash settings/output/cancellation. They use deterministic provider fixtures and do not send model requests. `check` also rejects a lockfile containing private-registry URLs; regenerate through your registry, then point `resolved` URLs back at `https://registry.npmjs.org/`.
+`check` runs every gate independently through `scripts/run-gates.ts` so one failure cannot hide another: lockfile policy, quality-standard policy, format check, typecheck, the real test suite, and package contents. The repository follows the [Strict Oxlint and Oxfmt Engineering Standard v5.1.2](quality/strict-oxlint-oxfmt-5.1.2.md); `npm run lint` runs the type-aware lint gate and `npm run policy:check` verifies the effective configuration against the adopted standard. See the [adoption record](quality/adoption.md) for the installed toolchain and the current migration status. `check:compat` runs the same gates minus packaging and is the contract the shared CI qualifier uses.
+
+The tests exercise real Pi loading, native path traversal and Unicode targets, non-mutating admission/previews, directory restoration, policy-await snapshots, subprocess isolation, native edit rendering, structured prompt boundaries, and native Bash settings/output/cancellation. They use deterministic provider fixtures and do not send model requests. `check:lock` also rejects a lockfile containing private-registry URLs; regenerate through your registry, then point `resolved` URLs back at `https://registry.npmjs.org/`.
 
 To test against another Pi installation:
 
