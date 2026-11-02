@@ -30,9 +30,17 @@ const {
   SessionManager,
   SettingsManager,
 } = host;
-// oxlint-disable-next-line no-unsafe-type-assertion -- QX-005: probing an export the host may not carry.
-const backgroundFactory = (host as { createBackgroundCommandExtension?: () => ExtensionFactory })
-  .createBackgroundCommandExtension;
+function backgroundCommandFactory(value: object): (() => ExtensionFactory) | undefined {
+  if (!("createBackgroundCommandExtension" in value)) {
+    return undefined;
+  }
+  const candidate: unknown = value.createBackgroundCommandExtension;
+  return typeof candidate === "function"
+    ? // oxlint-disable-next-line no-unsafe-type-assertion -- QX-005: the probe narrows an unknown export to its callable shape.
+      (candidate as () => ExtensionFactory)
+    : undefined;
+}
+const backgroundFactory = backgroundCommandFactory(host);
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "cwd-bash-")));
 const origin = join(root, "origin");
