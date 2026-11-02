@@ -17,6 +17,7 @@ import { spawnSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
+import { host } from "./test-host.ts";
 const {
   createAgentSession,
   createEditToolDefinition,
@@ -26,11 +27,7 @@ const {
   SessionManager,
   SettingsManager,
   withFileMutationQueue,
-} = (await import(
-  process.env.PI_PACKAGE_DIR
-    ? pathToFileURL(join(process.env.PI_PACKAGE_DIR, "dist/index.js")).href
-    : "@earendil-works/pi-coding-agent"
-)) as typeof import("@earendil-works/pi-coding-agent");
+} = host;
 
 const root = realpathSync.native(mkdtempSync(join(tmpdir(), "cwd-paths-")));
 const agentDir = join(root, "agent");
@@ -75,19 +72,24 @@ async function admit(name: string, input: Record<string, unknown>, id = name) {
     toolCallId: id,
     input,
   });
-  assert.ok(!blocked?.block, blocked?.reason);
+  assert.ok(blocked?.block !== true, blocked?.reason);
   return input;
 }
+/** Checked definition lookup: the surrounding assertions establish the tool is registered. */
+const definition = (name: string) => {
+  const found = session.getToolDefinition(name);
+  assert.ok(found, `${name} is registered`);
+  return found;
+};
 async function execute(name: string, input: Record<string, unknown>, signal?: AbortSignal) {
-  return session
-    .getToolDefinition(name)!
-    .execute(
-      name,
-      await admit(name, input),
-      signal,
-      undefined,
-      session.extensionRunner.createToolContext("test", undefined),
-    );
+  return definition(name).execute(
+    name,
+    await admit(name, input),
+    signal,
+    undefined,
+    // oxlint-disable-next-line no-useless-undefined -- QX-003: signal is a required `AbortSignal | undefined` parameter.
+    session.extensionRunner.createToolContext("test", undefined),
+  );
 }
 const text = (result: Awaited<ReturnType<typeof execute>>) =>
   result.content
@@ -102,23 +104,23 @@ try {
   // Final relative inputs still use the directory captured at admission.
   mkdirSync(join(root, "final-path"));
   await execute("change_dir", { path: join(root, "final-path") });
-  for (const [name, extra] of [
+  const finalCases: ReadonlyArray<[name: string, extra: Record<string, unknown>]> = [
     ["write", { content: "FINAL_PATH\n" }],
     ["edit", { edits: [{ oldText: "FINAL_PATH", newText: "UPDATED_PATH" }] }],
     ["read", {}],
     ["ls", {}],
-  ] as const) {
+  ];
+  for (const [name, extra] of finalCases) {
     const input = await admit(name, { path: name === "ls" ? "." : "final.txt", ...extra });
     input.path = name === "ls" ? "." : "final.txt";
-    const result = await session
-      .getToolDefinition(name)!
-      .execute(
-        name,
-        input,
-        undefined,
-        undefined,
-        session.extensionRunner.createToolContext("test", undefined),
-      );
+    const result = await definition(name).execute(
+      name,
+      input,
+      undefined,
+      undefined,
+      // oxlint-disable-next-line no-useless-undefined -- QX-003: signal is a required `AbortSignal | undefined` parameter.
+      session.extensionRunner.createToolContext("test", undefined),
+    );
     if (name === "read") {
       assert.equal(text(result), "UPDATED_PATH");
     }
@@ -200,37 +202,48 @@ try {
     const written = await execute("write", { path: name, content: "EXACT_UPDATED\n" });
     assert.equal(text(edited), `Successfully replaced 1 block(s) in ${join(root, name)}.`);
     assert.equal(text(written), `Successfully wrote to ${join(root, name)}`);
-    assert.ok((edited.details as { patch: string }).patch.startsWith(`--- ${join(root, name)}\n`));
+    const patchDetails = edited.details;
+    if (
+      typeof patchDetails !== "object" ||
+      patchDetails === null ||
+      !("patch" in patchDetails) ||
+      typeof patchDetails.patch !== "string"
+    ) {
+      assert.fail("edit details carry a patch");
+    }
+    assert.ok(patchDetails.patch.startsWith(`--- ${join(root, name)}\n`));
     assert.equal(readFileSync(join(root, name), "utf8"), "EXACT_UPDATED\n");
     assert.equal(readFileSync(join(root, "space name.txt"), "utf8"), "NEIGHBOR\n");
   }
-  for (const [stored, requested] of [
+  const fallbackFiles: ReadonlyArray<[stored: string, requested: string]> = [
     ["Shot at 10.00.00\u202fAM.txt", "Shot at 10.00.00 AM.txt"],
     ["d\u2019ecran.txt", "d'ecran.txt"],
     ["caf\u00e9.txt".normalize("NFD"), "caf\u00e9.txt"],
-  ]) {
-    writeFileSync(join(root, stored!), "FALLBACK");
+  ];
+  for (const [stored, requested] of fallbackFiles) {
+    writeFileSync(join(root, stored), "FALLBACK");
     assert.equal(text(await execute("read", { path: requested })), "FALLBACK");
     if (process.platform !== "win32") {
       await assert.rejects(() => execute("read", { path: `absent/../${requested}` }));
     }
   }
-  for (const [stored, requested] of [
+  const fallbackDirs: ReadonlyArray<[stored: string, requested: string]> = [
     ["d\u2019ecran", "d'ecran"],
     ["parent at 10.00.00\u202fAM.dir", "parent at 10.00.00 AM.dir"],
     ["caf\u00e9-parent".normalize("NFD"), "caf\u00e9-parent"],
     ["l\u2019\u00e9cran".normalize("NFD"), "l'\u00e9cran"],
-  ]) {
-    mkdirSync(join(root, stored!));
-    writeFileSync(join(root, stored!, "note.txt"), "PARENT_FALLBACK");
+  ];
+  for (const [stored, requested] of fallbackDirs) {
+    mkdirSync(join(root, stored));
+    writeFileSync(join(root, stored, "note.txt"), "PARENT_FALLBACK");
     assert.equal(
       text(await execute("read", { path: `${requested}${sep}note.txt` })),
       "PARENT_FALLBACK",
     );
     if (process.platform !== "win32") {
-      mkdirSync(join(root, stored!, "physical/nested"), { recursive: true });
-      symlinkSync("physical/nested", join(root, stored!, "alias"));
-      writeFileSync(join(root, stored!, "physical/note.txt"), "PHYSICAL_FALLBACK");
+      mkdirSync(join(root, stored, "physical/nested"), { recursive: true });
+      symlinkSync("physical/nested", join(root, stored, "alias"));
+      writeFileSync(join(root, stored, "physical/note.txt"), "PHYSICAL_FALLBACK");
       assert.equal(
         text(await execute("read", { path: `${requested}/alias/../note.txt` })),
         "PHYSICAL_FALLBACK",
@@ -247,8 +260,8 @@ try {
         }),
       );
       await execute("write", { path: `${requested}${sep}note.txt`, content: "EXACT_WRITE" });
-      assert.equal(readFileSync(join(root, requested!, "note.txt"), "utf8"), "EXACT_WRITE");
-      assert.equal(readFileSync(join(root, stored!, "note.txt"), "utf8"), "PARENT_FALLBACK");
+      assert.equal(readFileSync(join(root, requested, "note.txt"), "utf8"), "EXACT_WRITE");
+      assert.equal(readFileSync(join(root, stored, "note.txt"), "utf8"), "PARENT_FALLBACK");
     }
   }
   writeFileSync(join(root, "fallback space.txt"), "ASCII_FALLBACK");
@@ -260,6 +273,7 @@ try {
           { path: `fallback${space}space.txt` },
           undefined,
           undefined,
+          // oxlint-disable-next-line no-useless-undefined -- QX-003: signal is a required `AbortSignal | undefined` parameter.
           session.extensionRunner.createToolContext("test", undefined),
         ),
       ),
@@ -288,7 +302,7 @@ try {
   assert.doesNotMatch(hint, /file:\/\//);
   if (process.platform !== "win32") {
     const command = hint.match(/Use bash: (.*)\]$/)?.[1];
-    assert.ok(command);
+    assert.ok(command !== undefined, "the oversized-file hint names a bash command");
     const output = spawnSync("bash", ["-c", command], { encoding: "utf8" });
     assert.equal(output.status, 0, output.stderr);
     assert.equal(output.stdout, "X".repeat(50 * 1024));
@@ -298,27 +312,29 @@ try {
   assert.equal(text(await execute("read", { path: "url-content.txt" })), literalURL);
   const errorPath = "errors space\u00a0$$$&$'$`.txt";
   writeFileSync(join(root, errorPath), "repeat\nrepeat\n");
-  for (const [path, oldText] of [
+  const errorCases: ReadonlyArray<[path: string, oldText: string]> = [
     [errorPath, "no match"],
     [errorPath, "repeat"],
     ["missing space\u00a0$$$&$'$`.txt", "old"],
-  ]) {
+  ];
+  for (const [path, oldText] of errorCases) {
     await assert.rejects(
       () => execute("edit", { path, edits: [{ oldText, newText: "new" }] }),
       (error) => {
         assert.ok(error instanceof Error);
         assert.doesNotMatch(error.message, /file:\/\//);
-        assert.ok(error.message.includes(join(root, path!)), error.message);
+        assert.ok(error.message.includes(join(root, path)), error.message);
         return true;
       },
     );
   }
 
   // Native factories retain FIFO acquisition and their publisher under held locks.
+  // oxlint-disable-next-line no-useless-undefined -- QX-003: signal is a required `AbortSignal | undefined` parameter.
   const ctx = session.extensionRunner.createToolContext("test", undefined);
   for (const adapted of [false, true]) {
-    const write = adapted ? session.getToolDefinition("write")! : createWriteToolDefinition(root);
-    const edit = adapted ? session.getToolDefinition("edit")! : createEditToolDefinition(root);
+    const write = adapted ? definition("write") : createWriteToolDefinition(root);
+    const edit = adapted ? definition("edit") : createEditToolDefinition(root);
     for (const existing of [false, true]) {
       const path = join(root, `${adapted}-${existing}.txt`);
       if (existing) {
@@ -352,7 +368,7 @@ try {
           undefined,
           ctx,
         )
-        .catch((error) => {
+        .catch((error: unknown) => {
           failure = error;
         });
       try {
@@ -371,7 +387,7 @@ try {
     const path = join(root, `publisher-${adapted}.txt`);
     writeFileSync(path, "OLD");
     const before = statSync(path).ino;
-    const write = adapted ? session.getToolDefinition("write")! : createWriteToolDefinition(root);
+    const write = adapted ? definition("write") : createWriteToolDefinition(root);
     await write.execute("publisher", { path, content: "NEW" }, undefined, undefined, ctx);
     inodeChanges.push(statSync(path).ino !== before);
   }
@@ -393,24 +409,26 @@ try {
     });
     await entered;
     const controller = new AbortController();
-    const writing = session
-      .getToolDefinition("write")!
-      .execute("parents", { path, content: "OLD" }, controller.signal, undefined, ctx);
+    const writing = definition("write").execute(
+      "parents",
+      { path, content: "OLD" },
+      controller.signal,
+      undefined,
+      ctx,
+    );
     const outcome = writing.then(
-      () => undefined,
-      (error) => error,
+      () => "completed",
+      (error: unknown) => error,
     );
     const editing = cancel
       ? undefined
-      : session
-          .getToolDefinition("edit")!
-          .execute(
-            "parents-edit",
-            { path, edits: [{ oldText: "OLD", newText: "NEW" }] },
-            undefined,
-            undefined,
-            ctx,
-          );
+      : definition("edit").execute(
+          "parents-edit",
+          { path, edits: [{ oldText: "OLD", newText: "NEW" }] },
+          undefined,
+          undefined,
+          ctx,
+        );
     try {
       await delay(20);
       assert.ok(
@@ -429,7 +447,7 @@ try {
       assert.match(String(error), /abort/i);
       assert.ok(!existsSync(join(expectedDir, name)));
     } else {
-      assert.equal(error, undefined);
+      assert.equal(error, "completed");
       await editing;
       assert.equal(readFileSync(target, "utf8"), "NEW");
     }
@@ -453,7 +471,8 @@ try {
   writeFileSync(join(root, unicodeDir, "a b.txt"), "SCOPED_FALLBACK");
   writeFileSync(join(root, "search directory", "a b.txt"), "WRONG_DIRECTORY");
   const unicodeCwd = join(root, unicodeDir);
-  const nativeContext = Object.create(ctx, { cwd: { value: unicodeCwd } });
+  // oxlint-disable-next-line no-unsafe-type-assertion -- QX-005: Object.create returns any.
+  const nativeContext = Object.create(ctx, { cwd: { value: unicodeCwd } }) as typeof ctx;
   assert.equal(
     text(
       await createReadToolDefinition(unicodeCwd).execute(
@@ -469,7 +488,9 @@ try {
   await execute("change_dir", { path: unicodeCwd });
   assert.equal(text(await execute("read", { path: "a\u00a0b.txt" })), "SCOPED_FALLBACK");
   await execute("change_dir", { path: root });
-  for (const [selectedName, neighborName, stored, requested] of [
+  const projectPairs: ReadonlyArray<
+    [selected: string, neighbor: string, stored: string, requested: string]
+  > = [
     ["developer's-project", "developer’s-project", "don’t.txt", "don't.txt"],
     [
       "Shots at 10 AM.dir",
@@ -477,13 +498,14 @@ try {
       "Shot at 10\u202fAM.txt",
       "Shot at 10 AM.txt",
     ],
-  ]) {
-    const selected = join(root, selectedName!),
-      neighbor = join(root, neighborName!);
+  ];
+  for (const [selectedName, neighborName, stored, requested] of projectPairs) {
+    const selected = join(root, selectedName),
+      neighborDir = join(root, neighborName);
     mkdirSync(selected);
-    mkdirSync(neighbor);
-    writeFileSync(join(selected, stored!), "SELECTED_PROJECT");
-    writeFileSync(join(neighbor, stored!), "WRONG_PROJECT");
+    mkdirSync(neighborDir);
+    writeFileSync(join(selected, stored), "SELECTED_PROJECT");
+    writeFileSync(join(neighborDir, stored), "WRONG_PROJECT");
     await execute("change_dir", { path: selected });
     assert.equal(text(await execute("read", { path: requested })), "SELECTED_PROJECT");
     await execute("change_dir", { path: root });
@@ -508,28 +530,26 @@ try {
   controller.abort();
   await assert.rejects(
     () =>
-      session
-        .getToolDefinition("write")!
-        .execute(
-          "write",
-          pending,
-          controller.signal,
-          undefined,
-          session.extensionRunner.createToolContext("test", undefined),
-        ),
+      definition("write").execute(
+        "write",
+        pending,
+        controller.signal,
+        undefined,
+        // oxlint-disable-next-line no-useless-undefined -- QX-003: signal is a required `AbortSignal | undefined` parameter.
+        session.extensionRunner.createToolContext("test", undefined),
+      ),
     /abort/i,
   );
   assert.ok(!existsSync(join(root, "missing")));
   assert.ok(!existsSync(join(expectedDir, "new")));
-  await session
-    .getToolDefinition("write")!
-    .execute(
-      "write",
-      pending,
-      undefined,
-      undefined,
-      session.extensionRunner.createToolContext("test", undefined),
-    );
+  await definition("write").execute(
+    "write",
+    pending,
+    undefined,
+    undefined,
+    // oxlint-disable-next-line no-useless-undefined -- QX-003: signal is a required `AbortSignal | undefined` parameter.
+    session.extensionRunner.createToolContext("test", undefined),
+  );
   assert.equal(readFileSync(join(expectedDir, "new/nested/file"), "utf8"), "NEW");
   assert.equal(existsSync(join(root, "missing")), process.platform !== "win32");
 
@@ -552,11 +572,11 @@ try {
       ["find", { pattern: "*" }],
       ["grep", { pattern: "." }],
     ] as const) {
-      if (nativeError) {
+      if (nativeError !== undefined) {
         await assert.rejects(() => execute(name, { path: suffix, ...extra }));
       }
     }
-    if (nativeError) {
+    if (nativeError !== undefined) {
       await assert.rejects(() => execute("change_dir", { path: suffix }));
     }
   }
@@ -575,7 +595,7 @@ try {
     }
     const operation = () =>
       execute("write", { path: `${adapted}${sep}${suffix}`, content: "UPDATED" });
-    if (nativeError) {
+    if (nativeError !== undefined) {
       await assert.rejects(operation);
     } else {
       await operation();
@@ -592,12 +612,13 @@ try {
     symlinkSync("absent-parent/dangling.txt", join(root, "bad-dangling"));
     await assert.rejects(() => execute("write", { path: "bad-dangling", content: "BAD" }));
     assert.ok(!existsSync(join(root, "absent-parent")));
-    for (const [name, target] of [
+    const badLinks: ReadonlyArray<[name: string, target: string]> = [
       ["trailing-link", "file.txt/"],
       ["invalid-link", "file.txt/../file.txt"],
       ["cycle", "cycle"],
-    ]) {
-      symlinkSync(target!, join(root, name!));
+    ];
+    for (const [name, target] of badLinks) {
+      symlinkSync(target, join(root, name));
       await assert.rejects(() => execute("write", { path: name, content: "BAD" }));
     }
   }

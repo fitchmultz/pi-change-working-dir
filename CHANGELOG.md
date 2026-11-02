@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Adopt Strict Oxlint and Oxfmt Engineering Standard v5.1.2: qualified toolchain (oxlint 1.90.0 with the type-aware checker, oxfmt 0.75.0), policy verification against the adopted baseline, typed production modules with zero lint findings, repaired test sources, a runtime-generated qualification harness, and the lint gate in acceptance.
+
 ## 0.6.0 - 2026-10-01
 
 - Require Pi 1.0.0; qualify the exact official cohort and TypeBox 1.3.27 without dropped fork checkpoint, Bash-cwd-hook, or file-publisher dependencies.

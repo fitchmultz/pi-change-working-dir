@@ -329,7 +329,23 @@
         ],
         "max-statements": "off",
         "max-lines-per-function": "off",
-        "max-lines": "off"
+        "max-lines": "off",
+        "typescript/no-floating-promises": [
+          "error",
+          {
+            "checkThenables": true,
+            "ignoreIIFE": false,
+            "ignoreVoid": false,
+            "allowForKnownSafeCalls": [
+              {
+                "from": "package",
+                "package": "@types/node",
+                "name": ["nodeTest", "nodeIt", "nodeDescribe", "nodeSuite"]
+              }
+            ],
+            "allowForKnownSafePromises": []
+          }
+        ]
       }
     },
     {

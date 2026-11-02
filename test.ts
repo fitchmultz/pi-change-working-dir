@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+import { host } from "./test-host.ts";
 const {
   createAgentSession,
   createReadToolDefinition,
@@ -23,11 +24,7 @@ const {
   isToolCallEventType,
   SessionManager,
   SettingsManager,
-} = (await import(
-  process.env.PI_PACKAGE_DIR
-    ? pathToFileURL(join(process.env.PI_PACKAGE_DIR, "dist/index.js")).href
-    : "@earendil-works/pi-coding-agent"
-)) as typeof import("@earendil-works/pi-coding-agent");
+} = host;
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "cwd-contract-")));
 const origin = join(root, "origin"),
@@ -40,12 +37,13 @@ for (const path of [origin, target, other, agentDir]) {
 const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = agentDir;
 process.env.PI_OFFLINE = "1";
-for (const [path, text] of [
+const sourceTexts: ReadonlyArray<[string, string]> = [
   [origin, "ORIGIN"],
   [target, "TARGET"],
   [other, "OTHER"],
-]) {
-  writeFileSync(join(path!, "same.txt"), `${text}\n`);
+];
+for (const [path, text] of sourceTexts) {
+  writeFileSync(join(path, "same.txt"), `${text}\n`);
 }
 const contexts: Array<{
   session: Awaited<ReturnType<typeof createAgentSession>>["session"];
@@ -81,7 +79,7 @@ async function setup(
         options.factory?.(pi);
       },
     ],
-    ...(options.customFirst
+    ...(options.customFirst === true
       ? {
           extensionsOverride: (loaded) => ({
             ...loaded,
@@ -111,7 +109,7 @@ async function execute(session: Session, name: string, args: Record<string, unkn
   const input = structuredClone(args);
   const event = { type: "tool_call" as const, toolCallId: "test", toolName: name, input };
   const blocked = await session.extensionRunner.emitToolCall(event);
-  assert.ok(!blocked?.block, blocked?.reason);
+  assert.ok(blocked?.block !== true, blocked?.reason);
   const definition = session.getToolDefinition(name);
   assert.ok(definition, `${name} definition exists`);
   return definition.execute(
@@ -119,6 +117,7 @@ async function execute(session: Session, name: string, args: Record<string, unkn
     input,
     undefined,
     undefined,
+    // oxlint-disable-next-line no-useless-undefined -- QX-003: signal is a required `AbortSignal | undefined` parameter.
     session.extensionRunner.createToolContext("test", undefined),
   );
 }
@@ -145,14 +144,18 @@ const entries = (session: Session) =>
 
 try {
   const { session, api } = await setup();
-  assert.equal(session.getToolDefinition("change_dir")!.executionMode, "sequential");
-  assert.deepEqual(session.getToolDefinition("change_dir")!.constrainedSampling, {
+  const changeDir = session.getToolDefinition("change_dir");
+  assert.ok(changeDir);
+  assert.equal(changeDir.executionMode, "sequential");
+  assert.deepEqual(changeDir.constrainedSampling, {
     type: "json_schema",
     strict: "prefer",
   });
   assert.equal(query(api, session)?.cwd, origin);
+  const readDef = session.getToolDefinition("read");
+  assert.ok(readDef);
   assert.deepEqual(
-    session.getToolDefinition("read")!.parameters,
+    readDef.parameters,
     createReadToolDefinition(origin).parameters,
     "the adapter inherits the selected host's complete read schema, including host additions",
   );
@@ -171,15 +174,14 @@ try {
   cancelled.abort();
   await assert.rejects(
     () =>
-      session
-        .getToolDefinition("change_dir")!
-        .execute(
-          "cancelled",
-          { path: other },
-          cancelled.signal,
-          undefined,
-          session.extensionRunner.createToolContext("cancelled", undefined),
-        ),
+      changeDir.execute(
+        "cancelled",
+        { path: other },
+        cancelled.signal,
+        undefined,
+        // oxlint-disable-next-line no-useless-undefined -- QX-003: signal is a required `AbortSignal | undefined` parameter.
+        session.extensionRunner.createToolContext("cancelled", undefined),
+      ),
     /abort/i,
   );
   assert.equal(
@@ -191,7 +193,8 @@ try {
   const count = entries(session).length;
   await execute(session, "change_dir", { path: target });
   assert.equal(entries(session).length, count, "duplicate directory selection is not appended");
-  const selectedEntry = entries(session).at(-1)!;
+  const selectedEntry = entries(session).at(-1);
+  assert.ok(selectedEntry);
   for (const path of ["same.txt", pathToFileURL(join(target, "same.txt")).href]) {
     assert.match(text(await execute(session, "read", { path })), /TARGET/);
   }
@@ -201,14 +204,18 @@ try {
     "base64",
   );
   writeFileSync(join(target, "pixel.png"), image);
+  // oxlint-disable-next-line no-useless-undefined -- QX-003: signal is a required `AbortSignal | undefined` parameter.
+  const nativeContext = session.extensionRunner.createToolContext("native-image", undefined);
+  // oxlint-disable-next-line no-unsafe-type-assertion -- QX-005: Object.create returns any.
+  const nativeAtTarget = Object.create(nativeContext, {
+    cwd: { value: target },
+  }) as typeof nativeContext;
   const nativeImage = await createReadToolDefinition(target).execute(
     "native-image",
     { path: "pixel.png" },
     undefined,
     undefined,
-    Object.create(session.extensionRunner.createToolContext("native-image", undefined), {
-      cwd: { value: target },
-    }),
+    nativeAtTarget,
   );
   assert.deepEqual(
     (await execute(session, "read", { path: "pixel.png" })).content,
@@ -224,7 +231,7 @@ try {
     input: { path: "same.txt" },
   };
   const namespacedResult = await session.extensionRunner.emitToolCall(namespacedRead);
-  assert.ok(!namespacedResult?.block, namespacedResult?.reason);
+  assert.ok(namespacedResult?.block !== true, namespacedResult?.reason);
   assert.equal(
     namespacedRead.input.path,
     "same.txt",
@@ -268,15 +275,16 @@ try {
   await execute(session, "change_dir", { path: other });
   releasePolicy();
   await admission;
-  await session
-    .getToolDefinition("write")!
-    .execute(
-      "admitted",
-      invocation.input,
-      undefined,
-      undefined,
-      session.extensionRunner.createToolContext("test", undefined),
-    );
+  const writeDef = session.getToolDefinition("write");
+  assert.ok(writeDef);
+  await writeDef.execute(
+    "admitted",
+    invocation.input,
+    undefined,
+    undefined,
+    // oxlint-disable-next-line no-useless-undefined -- QX-003: signal is a required `AbortSignal | undefined` parameter.
+    session.extensionRunner.createToolContext("test", undefined),
+  );
   stopPolicy();
   assert.equal(readFileSync(join(target, "admitted.txt"), "utf8"), "pinned\n");
   assert.ok(!existsSync(join(other, "admitted.txt")));
@@ -353,6 +361,7 @@ try {
   await execute(session, "change_dir", { path: target });
   await session.reload();
   assert.throws(() => query(api, session), /stale/, "old event-bus API is invalidated on reload");
+  // oxlint-disable-next-line no-useless-undefined -- QX-003: signal is a required `AbortSignal | undefined` parameter.
   const ctx = session.extensionRunner.createToolContext("test", undefined);
   assert.equal(ctx.cwd, origin);
   assert.match(text(await execute(session, "read", { path: "same.txt" })), /TARGET/);
@@ -407,7 +416,14 @@ try {
       (entry): entry is Extract<typeof entry, { type: "custom_message" }> =>
         entry.type === "custom_message" && entry.customType === "change-working-dir:context",
     );
-  assert.equal((resetSnapshot?.details as { cwd?: string } | undefined)?.cwd, alias);
+  const resetCwd = (details: unknown): string | undefined =>
+    typeof details === "object" &&
+    details !== null &&
+    "cwd" in details &&
+    typeof details.cwd === "string"
+      ? details.cwd
+      : undefined;
+  assert.equal(resetCwd(resetSnapshot?.details), alias);
   assert.match(text(await execute(aliased.session, "read", { path: "same.txt" })), /OTHER/);
 
   // Custom definitions are never replaced, rebased or stripped of their executor.

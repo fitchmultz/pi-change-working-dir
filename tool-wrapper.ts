@@ -313,7 +313,6 @@ async function runWrapped<TParams extends TSchema, TDetails extends WrappedDetai
           : await prepared.delegatedExecute(id, call.value, signal, executionContext);
     } catch (error) {
       if (error instanceof Error && delegatedPath !== undefined && path !== undefined) {
-        // oxlint-disable-next-line no-param-reassign -- QX-001: rewriting in place preserves the delegated error's identity for callers that compare it.
         error.message = error.message.replaceAll(delegatedPath, () => display.cell.current ?? path);
       }
       throw error;
