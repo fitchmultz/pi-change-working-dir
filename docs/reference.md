@@ -80,7 +80,7 @@ An unavailable **saved** directory falls back to the original directory without 
 
 If the **live** selected directory disappears or loses access, covered operations fail until it is restored or another accessible directory is selected. Absolute file targets do not silently bypass this recovery requirement. Validation does not promise an operating-system sandbox or atomic protection against external filesystem changes.
 
-The maintained Pi 1.0 host drops the old checkpoint, Bash-cwd-hook, and file-publisher exports. Branch recovery remains supported through native journal restoration; no second execution-directory store is created.
+Pi has no checkpoint, Bash-cwd-hook, or file-publisher exports. Branch recovery remains supported through native journal restoration; no second execution-directory store is created.
 
 ## Model behavior
 

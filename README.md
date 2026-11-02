@@ -6,7 +6,7 @@ Change the working directory in [Pi](https://github.com/fitchmultz/pi) without a
 
 ## Install and start
 
-Use Pi 1.0.0 or later and Node.js 24.15 or later. Install the extension from GitHub. Start Pi.
+Use Pi 1.5.0 or later and Node.js 24.15 or later. Install the extension from GitHub. Start Pi.
 
 ```sh
 pi install git:github.com/fitchmultz/pi-change-working-dir
