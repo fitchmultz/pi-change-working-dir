@@ -212,7 +212,7 @@ function admitInvocation(
   deps.selection.initialize(ctx);
   const invocation =
     deps.invocations.get(value) ?? deps.bind(name, value, deps.selection.current(ctx));
-  const requestedPath = pathArgument(value);
+  const requestedPath = PATH_TOOLS.has(name) ? pathArgument(value) : undefined;
   return {
     cwd: invocation.cwd,
     path: requestedPath === undefined ? undefined : operationPath(requestedPath, invocation.cwd),

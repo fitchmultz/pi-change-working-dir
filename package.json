@@ -16,6 +16,10 @@
   "files": [
     "index.ts",
     "cwd-context.ts",
+    "mutation-delegate.ts",
+    "tool-wrapper.ts",
+    "selection.ts",
+    "native-paths.ts",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
