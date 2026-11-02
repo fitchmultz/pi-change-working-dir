@@ -137,8 +137,8 @@ function isMutation(name: string): boolean {
 }
 
 async function statThenRealpath(path: string): Promise<string> {
-  await stat(path);
-  return realpath(path);
+  const [, resolved] = await Promise.all([stat(path), realpath(path)]);
+  return resolved;
 }
 
 /** A context whose cwd is the captured directory, for native tool execution. */

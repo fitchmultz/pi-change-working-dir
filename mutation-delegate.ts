@@ -143,10 +143,13 @@ function editDelegate(call: {
   const definition = createEditToolDefinition(cwd, {
     operations: {
       access: async () => {
-        await access(path, constants.R_OK | constants.W_OK);
-        await stat(path);
+        const [, , resolved] = await Promise.all([
+          access(path, constants.R_OK | constants.W_OK),
+          stat(path),
+          realpath(path),
+        ]);
         signal?.throwIfAborted();
-        showTarget(await realpath(path));
+        showTarget(resolved);
       },
       readFile: async () => readFile(path),
       writeFile: publish,
