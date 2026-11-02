@@ -114,7 +114,6 @@ export function createSelection(
   const current = (ctx: ExtensionContext): string => directory ?? ctx.cwd;
   const updateStatus = (ctx: ExtensionContext): void => {
     if (ctx.hasUI) {
-      // oxlint-disable-next-line no-useless-undefined -- QX-003: the host status API takes a required string | undefined slot value.
       ctx.ui.setStatus("cwd", directory === undefined ? undefined : `cwd: ${tildify(directory)}`);
     }
   };

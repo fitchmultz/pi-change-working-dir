@@ -227,7 +227,6 @@ function registerLifecycle(
   });
   pi.on("session_shutdown", (_event, ctx) => {
     if (ctx.hasUI) {
-      // oxlint-disable-next-line no-useless-undefined -- QX-003: the host status API takes a required string | undefined slot value.
       ctx.ui.setStatus("cwd", undefined);
     }
     selection.reset();
@@ -256,7 +255,6 @@ function registerChannels(pi: ExtensionAPI, selection: ReturnType<typeof createS
       } catch (error) {
         outcome = { cwd: selection.current(ctx), error: errorMessage(error) };
       }
-      // oxlint-disable-next-line no-param-reassign -- QX-001: the channel contract delivers results by assigning request.result.
       request.result = outcome;
     });
   }

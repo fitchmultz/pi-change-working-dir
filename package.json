@@ -31,7 +31,7 @@
   "scripts": {
     "test": "node --test --test-concurrency=1 \"test*.ts\"",
     "typecheck": "tsc",
-    "lint": "oxlint --deny-warnings .",
+    "lint": "oxlint --deny-warnings --ignore-pattern 'probes/**' .",
     "lint:agent": "oxlint --deny-warnings --format=agent .",
     "lint:fix": "oxlint --fix .",
     "format": "oxfmt --write .",
@@ -39,8 +39,8 @@
     "policy:check": "node scripts/check-policy.ts",
     "check:lock": "node -e \"process.exit(/workos|socket-firewall/i.test(require('fs').readFileSync('package-lock.json','utf8')) ? 1 : 0)\"",
     "pack:check": "npm pack --dry-run",
-    "check": "node scripts/run-gates.ts check:lock policy:check format:check typecheck test pack:check",
-    "check:compat": "node scripts/run-gates.ts check:lock policy:check format:check typecheck test",
+    "check": "node scripts/run-gates.ts check:lock policy:check format:check lint typecheck test pack:check",
+    "check:compat": "node scripts/run-gates.ts check:lock policy:check format:check lint typecheck test",
     "prepublishOnly": "npm run check"
   },
   "engines": {

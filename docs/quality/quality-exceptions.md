@@ -16,18 +16,19 @@ Rule, option, or threshold; installed tool versions:
   oxc-parser 0.156.0.
 
 Scope: files, authorized operations, origins, or bounded pattern:
-  cwd-context.ts (2), index.ts (1), tool-wrapper.ts (4). Authorized operations: writing
+  cwd-context.ts (2), tool-wrapper.ts (3), test-context.ts (2). Authorized operations: writing
   systemPromptOptions.cwd and systemPromptOptions.sections.cwd during before_agent_start (the host
-  documents systemPromptOptions as mutable during the event); assigning request.result on the
-  resolve/set channel requests (the channel contract delivers results through that field);
-  rebinding input.path on admitted tool arguments (the admission contract requires in-place argument
-  mutation); writing workingDirectory/workingTarget on the shared per-row render state (ToolRenderContext
-  state is shared renderer state by the host's own declaration); and rewriting a delegated error's
-  message in place (the wrapper owns that error instance and preserves its identity).
+  documents systemPromptOptions as mutable during the event) — once in the production projector and
+  once in the test's own before_agent_start factory; rebinding input.path on admitted tool arguments
+  (the admission contract requires in-place argument mutation); and writing workingDirectory/
+  workingTarget on the shared per-row render state (ToolRenderContext state is shared renderer
+  state by the host's own declaration). The resolve/set channel handlers assign request.result on a
+  narrowed local alias, and the delegated-error rewrite targets a catch binding, so neither needs
+  this exemption.
 
 Directive selectors/inventory and optional duplication bounds:
-  Seven single-rule next-line directives, each tagged QX-001: two in cwd-context.ts, one in index.ts,
-  four in tool-wrapper.ts. Recorded counts live in scripts/policy-baseline.ts.
+  Seven single-rule next-line directives, each tagged QX-001: two in cwd-context.ts, three in
+  tool-wrapper.ts, two in test-context.ts. Recorded counts live in scripts/policy-baseline.ts.
 
 Diagnostic and required contract:
   The checker reports "Assignment to property of function parameter" at each site. Each target object
@@ -115,7 +116,7 @@ Review and revisit trigger:
   defines (requires a new inventory entry).
 ```
 
-## QX-003 — no-useless-undefined for required-position undefined arguments
+## QX-003 — no-useless-undefined where the installed checker flags required-position undefined
 
 ```text
 ID and title:
@@ -126,43 +127,49 @@ Rule, option, or threshold; installed tool versions:
   (type-aware); oxfmt 0.75.0; oxc-parser 0.156.0.
 
 Scope: files, authorized operations, origins, or bounded pattern:
-  index.ts (1), selection.ts (1). Authorized operations: ctx.ui.setStatus("cwd", undefined) when the
-  selection is cleared — the host's setStatus declares the value parameter as
-  `string | undefined` in a required position, so clearing the slot needs the literal argument. The
-  two sites are the live status update and the shutdown cleanup.
+  test.ts (5), test-paths.ts (6), test-context.ts (2), test-bash.ts (1), test-render.ts (1).
+  Authorized operations: passing undefined as the second argument to
+  session.extensionRunner.createToolContext — the host declares that parameter as
+  `AbortSignal | undefined` in a required position, so omitting it is a type error — and returning
+  undefined from the resource-loader stubs' getSystemPrompt/getSystemPromptSource, whose contract
+  declares a required `string | undefined` return. The production setStatus call sites use the same
+  required-undefined shape but the installed checker does not flag them, so they carry no
+  directives.
 
 Directive selectors/inventory and optional duplication bounds:
-  Two single-rule next-line directives, each tagged QX-003, recorded in scripts/policy-baseline.ts.
+  Fifteen single-rule next-line directives, each tagged QX-003, recorded in scripts/policy-baseline.ts.
 
 Diagnostic and required contract:
-  The checker reports "Do not use useless `undefined`" for the argument. The installed checker does
-  not distinguish required-position `string | undefined` slots from optional ones here, so the
-  diagnostic is a false positive for this API shape: omitting the argument is a type error because
-  the parameter is not optional.
+  The checker reports "Do not use useless `undefined`" for the argument or return. It does not
+  distinguish these required-undefined slots from removable ones, so the diagnostic is a false
+  positive for this API shape: omitting the argument (or return) is a type error because the
+  position is not optional.
 
 Actual compliant alternative and demonstrated quality cost:
   There is no compliant alternative at these call sites. The parameter is required and typed to
   include undefined; passing a non-undefined value would show a stale slot instead of clearing it.
 
 Chosen adjustment and why its scope is appropriate:
-  Per-site directives on exactly the two clearing calls. The rule stays active and still flags
-  removable undefined elsewhere, including optional-parameter positions.
+  Per-site directives on exactly the fifteen inventoried call and return sites. The rule stays
+  active and still flags removable undefined elsewhere, including optional-parameter positions.
 
 Structural comparison or unsafe-type evidence, where applicable:
   Not a structural exception. The host declaration is the ui context's
   setStatus(key: string, value: string | undefined).
 
 Verification commands, relevant tests, and results:
-  npm run policy:check; npm run typecheck (removing the argument fails compilation); npm test
-  asserts the status slot's cleared and populated renderings.
+  npm run policy:check; npm run typecheck (omitting the createToolContext argument or the loader
+  stub returns fails compilation); npm test drives every inventoried createToolContext site.
 
 Retained protection, lost detection, and established assumptions:
-  Retained: the rule still flags every other undefined argument, including optional positions where
-  omission is meaningful. Lost detection: none — the two exempted arguments cannot be omitted.
+  Retained: the rule still flags every other undefined argument and return, including optional
+  positions where omission is meaningful. Lost detection: none — the fifteen exempted arguments and
+  returns cannot be omitted.
 
 Review and revisit trigger:
-  Any host release that makes the setStatus value parameter optional, or any new required-position
-  undefined argument (requires a new inventory entry and record update).
+  Any oxlint or oxlint-tsgolint upgrade that changes which required-undefined positions are flagged
+  (the two production setStatus sites became unflagged between qualification runs), or any host
+  release that makes these parameters optional.
 ```
 
 ## QX-004 — no-unsafe-type-assertion at host-typing boundaries
@@ -219,6 +226,68 @@ Retained protection, lost detection, and established assumptions:
 Review and revisit trigger:
   Any host release that re-types Object.create, tool definition generics, or wrapToolDefinition;
   the assertions should be re-examined and ideally removed.
+```
+
+## QX-007 — node:test registration allowance in the test profile
+
+```text
+ID and title:
+  QX-007 — node:test registration allowance on the test-profile override.
+
+Rule, option, or threshold; installed tool versions:
+  typescript/no-floating-promises with allowForKnownSafeCalls =
+  [{from: "package", package: "@types/node", name: [nodeTest, nodeIt, nodeDescribe, nodeSuite]}].
+  oxlint 1.90.0; oxlint-tsgolint 7.0.2005 (type-aware); oxfmt 0.75.0; oxc-parser 0.156.0.
+
+Scope: files, authorized operations, origins, or bounded pattern:
+  The test-profile override in .oxlintrc.json (test*.ts and the standard's test-file patterns).
+  Authorized operations: top-level test registrations made through those four mapped local names.
+  Nothing else in the file changes; every other rule and option in the baseline stays exactly as
+  the standard sets it.
+
+Directive selectors/inventory and optional duplication bounds:
+  No directives are used. Four mapped names, one package origin, test profile only.
+
+Diagnostic and required contract:
+  An un-awaited `nodeTest(...)` registration reports "Promises must be awaited". The registration
+  is fire-and-forget by design: the node:test runner owns the returned promise, schedules the
+  test, and reports the result through its own reporter, so awaiting it is not the contract. The
+  test files import the framework under the mapped names for this reason.
+
+Actual compliant alternative and demonstrated quality cost:
+  The compliant alternative is `void nodeTest(...)` (or `await`) at every registration site,
+  because ignoreVoid and every other option stay at the baseline. That adds non-semantic ceremony
+  to every registration in the repository while removing no real risk. The standard defines this
+  mapping for precisely this case (Section 6.4), so the allowance is the narrower choice: it
+  exempts four named functions instead of silencing the rule for a file, a directory, or the
+  whole test profile.
+
+Chosen adjustment and why its scope is appropriate:
+  Declaration-qualified allowance limited to the four names the repository actually uses, applied
+  only in the test profile. Production sources keep the rule unrestricted.
+
+Structural comparison or unsafe-type evidence, where applicable:
+  Not a structural exception. Type flow is the standard's own example mapping, narrowed to the
+  names in use (see lost detection below).
+
+Verification commands, relevant tests, and results:
+  The qualification controls in test-quality.ts cover the floating-promise protection with a real
+  violation (async-floating.ts reports exactly one diagnostic) and valid counterparts
+  (async-owned.ts, async-unknown-forward.ts report zero). test-quality.ts itself registers
+  through the mapped names and passes the checker.
+
+Retained protection, lost detection, and established assumptions:
+  Retained: all other floating-promise options (ignoreVoid false, ignoreIIFE false,
+  checkThenables true, allowForKnownSafePromises empty) plus every other rule in both profiles.
+  Lost detection: registrations using shorthand modifiers through a mapped alias are not exempted
+  (adding them to the name list makes the installed checker panic when a shorthand is called
+  through a mapped alias). The repository uses none; a new one will surface as an ordinary
+  finding in `npm run lint`.
+
+Review and revisit trigger:
+  Any upgrade of oxlint or oxlint-tsgolint, any new registration form, or the first use of a
+  shorthand modifier through a mapped name. Re-measure with the qualification controls and update
+  this record.
 ```
 
 No other exceptions exist. Structural thresholds, formatter settings, and the baseline rule set are

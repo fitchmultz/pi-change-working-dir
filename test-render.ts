@@ -11,28 +11,30 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, sep } from "node:path";
+import { join, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 
-const entry = process.env.PI_PACKAGE_DIR
-  ? pathToFileURL(join(process.env.PI_PACKAGE_DIR, "dist/index.js")).href
-  : import.meta.resolve("@earendil-works/pi-coding-agent");
-const dist = dirname(fileURLToPath(entry));
+import { host, distDir, importModule } from "./test-host.ts";
+import type * as AnsiModule from "./node_modules/@earendil-works/pi-coding-agent/dist/utils/ansi.js";
+import type * as ThemeModule from "./node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
+import type * as ToolExecutionModule from "./node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/tool-execution.js";
 const {
   createAgentSession,
   DefaultResourceLoader,
   SessionManager,
   SettingsManager,
   withFileMutationQueue,
-} = (await import(entry)) as typeof import("@earendil-works/pi-coding-agent");
-const { ToolExecutionComponent } = await import(
-  pathToFileURL(join(dist, "modes/interactive/components/tool-execution.js")).href
+} = host;
+const { ToolExecutionComponent } = await importModule<typeof ToolExecutionModule>(
+  pathToFileURL(join(distDir, "modes/interactive/components/tool-execution.js")).href,
 );
-const { initTheme } = await import(
-  pathToFileURL(join(dist, "modes/interactive/theme/theme.js")).href
+const { initTheme } = await importModule<typeof ThemeModule>(
+  pathToFileURL(join(distDir, "modes/interactive/theme/theme.js")).href,
 );
-const { stripAnsi } = await import(pathToFileURL(join(dist, "utils/ansi.js")).href);
+const { stripAnsi } = await importModule<typeof AnsiModule>(
+  pathToFileURL(join(distDir, "utils/ansi.js")).href,
+);
 const root = realpathSync(mkdtempSync(join(tmpdir(), "cwd-render-")));
 const a = join(root, "a"),
   b = join(root, process.platform === "win32" ? "b" : "b\\literal\u00a0directory"),
@@ -42,11 +44,12 @@ for (const path of [a, b, agentDir]) {
 }
 const beforeA = "A_ONLY_CONTEXT\nold text\nA_ONLY_TAIL\n";
 const beforeB = "B_ONLY_CONTEXT\nold text\nB_ONLY_TAIL\n";
-for (const [path, content] of [
+const seedFiles: ReadonlyArray<[path: string, content: string]> = [
   [a, beforeA],
   [b, beforeB],
-]) {
-  writeFileSync(join(path!, "same.txt"), content!);
+];
+for (const [path, content] of seedFiles) {
+  writeFileSync(join(path, "same.txt"), content);
 }
 mkdirSync(join(b, "actual/nested"), { recursive: true });
 symlinkSync(
@@ -89,17 +92,34 @@ const { session } = await createAgentSession({
   resourceLoader: loader,
   sessionManager: SessionManager.inMemory(a),
 });
-let release!: () => void;
+let release: (() => void) | undefined;
+/** White-box view of the component's private preview pipeline; no public accessor exists. */
+type PreviewPipeline = { rendererState: { callComponent?: { preview?: { error?: string } } } };
+const previewError = (
+  component: InstanceType<typeof ToolExecutionComponent>,
+): string | undefined => {
+  // oxlint-disable-next-line no-unsafe-type-assertion -- QX-005: the preview pipeline is private.
+  const state = component as unknown as PreviewPipeline;
+  return state.rendererState.callComponent?.preview?.error;
+};
 try {
   await session.bindExtensions({ onError: (error) => assert.fail(error.error) });
+  // oxlint-disable-next-line no-useless-undefined -- QX-003: signal is a required `AbortSignal | undefined` parameter.
   const ctx = session.extensionRunner.createToolContext("test", undefined);
-  await session
-    .getToolDefinition("change_dir")!
-    .execute("cwd", { path: b }, undefined, undefined, ctx);
-  const definition = session.getToolDefinition("edit")!;
+  const changeDirDef = session.getToolDefinition("change_dir");
+  assert.ok(changeDirDef, "change_dir is registered");
+  await changeDirDef.execute("cwd", { path: b }, undefined, undefined, ctx);
+  const definition = session.getToolDefinition("edit");
+  assert.ok(definition, "edit is registered");
   initTheme("dark");
   const args = { path: requested, edits: [{ oldText: "old text", newText: "new text" }] };
-  const ui = { requestRender() {} };
+  type Ui = ConstructorParameters<typeof ToolExecutionComponent>[5];
+  const uiStub = {
+    // oxlint-disable-next-line no-empty-function -- QX-006: the component only needs the hook to exist.
+    requestRender() {},
+  };
+  // oxlint-disable-next-line no-unsafe-type-assertion -- QX-005: rendering-only stub of the wide TUI parameter.
+  const ui: Ui = uiStub as Ui;
   const component = new ToolExecutionComponent("edit", "edit-preview", args, {}, definition, ui, a);
   component.setArgsComplete();
   const render = (value: InstanceType<typeof ToolExecutionComponent>): string =>
@@ -143,14 +163,24 @@ try {
     /file:\/\//,
     "render native path labels rather than delegated URLs",
   );
+  assert.ok(release !== undefined, "the lock release exists");
   release();
   await lock;
   const result = await executing;
   assert.equal(readFileSync(join(a, "same.txt"), "utf8"), beforeA);
   assert.equal(readFileSync(physicalFile, "utf8"), beforeB.replace("old text", "new text"));
   assert.equal(readFileSync(join(b, "actual", asciiName), "utf8"), beforeA);
+  const invocationDetails = result.details;
+  if (
+    typeof invocationDetails !== "object" ||
+    invocationDetails === null ||
+    !("workingPath" in invocationDetails) ||
+    typeof invocationDetails.workingPath !== "string"
+  ) {
+    assert.fail("edit details carry workingPath");
+  }
   assert.equal(
-    (result.details as { workingPath: string }).workingPath,
+    invocationDetails.workingPath,
     input.path,
     "invocation metadata retains the addressed path",
   );
@@ -163,7 +193,7 @@ try {
   const legacy = new ToolExecutionComponent("edit", "legacy-replay", args, {}, definition, ui, a);
   legacy.updateResult({
     ...result,
-    details: { ...(result.details as object), workingTarget: undefined, workingPath: physicalFile },
+    details: { ...invocationDetails, workingTarget: undefined, workingPath: physicalFile },
     isError: false,
   });
   assert.match(render(legacy), /B_ONLY_CONTEXT/);
@@ -181,16 +211,16 @@ try {
       a,
     );
     failed.setArgsComplete();
-    const input = structuredClone(failedArgs);
+    const failedInput = structuredClone(failedArgs);
     await session.extensionRunner.emitToolCall({
       type: "tool_call",
       toolName: "edit",
       toolCallId: `failed-${oldText}`,
-      input,
+      input: failedInput,
     });
     failed.markExecutionStarted();
     await assert.rejects(
-      () => definition.execute(`failed-${oldText}`, input, undefined, undefined, ctx),
+      () => definition.execute(`failed-${oldText}`, failedInput, undefined, undefined, ctx),
       (error) => {
         assert.ok(error instanceof Error);
         assert.ok(error.message.includes(physicalFile), error.message);
@@ -202,21 +232,12 @@ try {
         return true;
       },
     );
-    for (
-      let attempt = 0;
-      attempt < 200 && !failed.rendererState.callComponent?.preview?.error;
-      attempt++
-    ) {
+    for (let attempt = 0; attempt < 200 && previewError(failed) === undefined; attempt++) {
       await delay(5);
     }
-    assert.ok(
-      failed.rendererState.callComponent?.preview?.error,
-      "native failed preview completed",
-    );
-    assert.ok(
-      failed.rendererState.callComponent.preview.error.includes(physicalFile),
-      failed.rendererState.callComponent.preview.error,
-    );
+    const preview = previewError(failed);
+    assert.ok(preview !== undefined, "native failed preview completed");
+    assert.ok(preview.includes(physicalFile), preview);
     const output = render(failed);
     assert.doesNotMatch(output, /file:\/\//);
     assert.equal(
@@ -226,12 +247,14 @@ try {
     );
   }
   const writeArgs = { path: "preview-only/new.txt", content: "NEW" };
+  const writeDef = session.getToolDefinition("write");
+  assert.ok(writeDef, "write is registered");
   const writeComponent = new ToolExecutionComponent(
     "write",
     "write-preview",
     writeArgs,
     {},
-    session.getToolDefinition("write")!,
+    writeDef,
     ui,
     a,
   );

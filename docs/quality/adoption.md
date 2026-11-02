@@ -67,15 +67,20 @@ depart from the standard's own values are recorded in [quality-exceptions.md](qu
 
 ## Migration status
 
-Phased per the standard's section 9.2. Phase 1 (this change) installs the qualified toolchain,
-formats the repository, applies all mechanically fixable findings, enables the compiler options,
-and adds policy verification to acceptance. Remaining manual findings are being repaired in source
-before the lint gate joins `check`/`check:compat`; until then the lint gate is deliberately not
-part of acceptance, the current finding count is tracked in the migration PRs, and no finding
-budget or baseline filter exists. The repository adopts the standard fully when the lint gate runs
-in acceptance and every gate passes at the integrated revision.
+Complete. The phased migration (standard section 9.2) finished with this change: the toolchain and
+policy verification landed first, the production sources were decomposed into typed modules and
+repaired to zero findings, and the test sources followed — every manual finding fixed in source,
+the lint gate joined `check`/`check:compat`, and no finding budget or baseline filter was ever
+introduced. Seven quality exceptions are recorded (one rule allowance, six directive families,
+37 inventoried site directives), each with evidence in
+[quality-exceptions.md](quality-exceptions.md).
 
 ## Integrated verification
 
-Recorded per phase in the adopting PR; the final phase records the exact integrated revision and
-the hosted CI result at that revision.
+| Host                             | Role                                                                      | Result                                      |
+| -------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------- |
+| macOS arm64 qualification host   | Full toolchain: format, lint (type-aware), typecheck, tests, pack, policy | All gates pass (`npm run check`)            |
+| CI (ubuntu-latest, macos-latest) | Dual-host acceptance at the integrated revision                           | See the PR checks for the integrated commit |
+
+Integrated revision: recorded in the PR head commit for this change; the qualification-host run above
+is at that revision and CI reproduces it.

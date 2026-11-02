@@ -12,7 +12,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import type { BashOperations, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
@@ -21,11 +20,7 @@ type OutputCallbacks = {
   onEnd?: (source: "stdout" | "stderr") => void;
 };
 
-const host = (await import(
-  process.env.PI_PACKAGE_DIR
-    ? pathToFileURL(join(process.env.PI_PACKAGE_DIR, "dist/index.js")).href
-    : "@earendil-works/pi-coding-agent"
-)) as typeof import("@earendil-works/pi-coding-agent");
+import { host } from "./test-host.ts";
 const {
   createAgentSession,
   createBashToolDefinition,
@@ -35,8 +30,17 @@ const {
   SessionManager,
   SettingsManager,
 } = host;
-const backgroundFactory = (host as { createBackgroundCommandExtension?: () => ExtensionFactory })
-  .createBackgroundCommandExtension;
+function backgroundCommandFactory(value: object): (() => ExtensionFactory) | undefined {
+  if (!("createBackgroundCommandExtension" in value)) {
+    return undefined;
+  }
+  const candidate: unknown = value.createBackgroundCommandExtension;
+  return typeof candidate === "function"
+    ? // oxlint-disable-next-line no-unsafe-type-assertion -- QX-005: the probe narrows an unknown export to its callable shape.
+      (candidate as () => ExtensionFactory)
+    : undefined;
+}
+const backgroundFactory = backgroundCommandFactory(host);
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "cwd-bash-")));
 const origin = join(root, "origin");
@@ -115,11 +119,11 @@ try {
         toolName,
         input,
       });
-      assert.ok(!result?.block, result?.reason);
+      assert.ok(result?.block !== true, result?.reason);
       if (toolName === "bash") {
         assert.equal(input.command, originalCommand, "native routing needs no cd prefix");
       }
-      const tool = session.agent.state.tools.find((tool) => tool.name === toolName);
+      const tool = session.agent.state.tools.find((candidate) => candidate.name === toolName);
       assert.ok(tool, `${toolName} is active`);
       const output = await tool.execute("test", input);
       return output.content
@@ -144,33 +148,42 @@ try {
       `${target}\nkept\nproject:${target}\n${session.sessionId}`,
     );
     if (backgroundFactory) {
-      const job = JSON.parse(
-        await execute("background_command", {
-          action: "start",
-          command: "sleep 0.1; pwd -P",
-          timeout: 5,
-        }),
-      ) as {
+      type BackgroundJob = {
         id: string;
         cwd: string;
         status: string;
         logFile: string;
         exitCode?: number;
       };
-      try {
-        assert.equal(job.cwd, target, "the real background caller captures the selected directory");
-        await execute("change_dir", { path: alternate });
-        for (
-          let attempt = 0;
-          attempt < 100 && ["starting", "running"].includes(job.status);
-          attempt++
-        ) {
+      const jobRecord = (output: string): BackgroundJob =>
+        // oxlint-disable-next-line no-unsafe-type-assertion -- QX-005: parsed JSON cast to the polled record.
+        JSON.parse(output) as BackgroundJob;
+      const awaitCompletion = async (id: string): Promise<BackgroundJob> => {
+        let job = jobRecord(await execute("background_command", { action: "status", id }));
+        for (let attempt = 0; ["starting", "running"].includes(job.status); attempt += 1) {
+          if (attempt === 100) {
+            assert.fail(`background job ${id} did not finish`);
+          }
           await delay(20);
-          Object.assign(
-            job,
-            JSON.parse(await execute("background_command", { action: "status", id: job.id })),
-          );
+          job = jobRecord(await execute("background_command", { action: "status", id }));
         }
+        return job;
+      };
+      const started = jobRecord(
+        await execute("background_command", {
+          action: "start",
+          command: "sleep 0.1; pwd -P",
+          timeout: 5,
+        }),
+      );
+      try {
+        assert.equal(
+          started.cwd,
+          target,
+          "the real background caller captures the selected directory",
+        );
+        await execute("change_dir", { path: alternate });
+        const job = await awaitCompletion(started.id);
         assert.equal(job.status, "succeeded");
         assert.equal(job.exitCode, 0);
         assert.equal(
@@ -179,8 +192,8 @@ try {
           "the real child executes in the captured directory after selection changes",
         );
       } finally {
-        const cancelled = JSON.parse(
-          await execute("background_command", { action: "cancel", id: job.id }),
+        const cancelled = jobRecord(
+          await execute("background_command", { action: "cancel", id: started.id }),
         );
         assert.ok(
           !["starting", "running"].includes(cancelled.status),
@@ -205,7 +218,9 @@ try {
       `${target}\nkept\nreloaded:${target}\n${session.sessionId}`,
     );
     const definition = session.getToolDefinition("bash");
-    const source = session.getAllTools().find((tool) => tool.name === "bash")!.sourceInfo;
+    const bashRegistration = session.getAllTools().find((candidate) => candidate.name === "bash");
+    assert.ok(bashRegistration, "bash is registered");
+    const source = bashRegistration.sourceInfo;
     assert.equal(
       source.path,
       join(process.cwd(), "index.ts"),
@@ -225,7 +240,8 @@ try {
     assert.equal(existsSync(origin), false);
 
     // Native streaming/cancellation and exit errors still work after origin removal.
-    const bash = session.agent.state.tools.find((tool) => tool.name === "bash")!;
+    const bash = session.agent.state.tools.find((candidate) => candidate.name === "bash");
+    assert.ok(bash, "bash is active");
     const controller = new AbortController();
     await assert.rejects(
       () =>
@@ -277,10 +293,10 @@ try {
     let customCalls = 0;
     const local = createLocalBashOperations({ shellPath });
     userOperations = {
-      exec(command, cwd, options) {
+      exec(cmd, cwd, options) {
         customCalls += 1;
         assert.equal(cwd, target);
-        return local.exec(command, cwd, options);
+        return local.exec(cmd, cwd, options);
       },
     };
     assert.equal(await runUserBash(), `${target}\nkept\nreloaded:${target}`);
@@ -358,7 +374,7 @@ try {
     });
     await customLoader.reload();
     assert.deepEqual(customLoader.getExtensions().errors, []);
-    const { session } = await createAgentSession({
+    const { session: ownerSession } = await createAgentSession({
       cwd: alternate,
       agentDir,
       settingsManager,
@@ -367,13 +383,15 @@ try {
       ...(owner === "sdk" ? { customTools: [custom] } : {}),
     });
     try {
-      await session.bindExtensions({ onError: (error) => assert.fail(error.error) });
-      assert.equal(session.getToolDefinition("bash"), custom);
-      await session.agent.state.tools
-        .find((tool) => tool.name === "change_dir")!
-        .execute("change", { path: root });
+      await ownerSession.bindExtensions({ onError: (error) => assert.fail(error.error) });
+      assert.equal(ownerSession.getToolDefinition("bash"), custom);
+      const changeDirDef = ownerSession.agent.state.tools.find(
+        (candidate) => candidate.name === "change_dir",
+      );
+      assert.ok(changeDirDef, "change_dir is active");
+      await changeDirDef.execute("change", { path: root });
       const input = { command: "custom-owned" };
-      await session.extensionRunner.emitToolCall({
+      await ownerSession.extensionRunner.emitToolCall({
         type: "tool_call",
         toolCallId: "custom",
         toolName: "bash",
@@ -384,32 +402,33 @@ try {
         "custom-owned",
         "custom executors own their operation-directory integration",
       );
-      const result = await session.agent.state.tools
-        .find((tool) => tool.name === "bash")!
-        .execute("custom", input);
+      const bashDef = ownerSession.agent.state.tools.find((candidate) => candidate.name === "bash");
+      assert.ok(bashDef, "bash is active");
+      const result = await bashDef.execute("custom", input);
       assert.equal(result.content[0]?.type === "text" && result.content[0].text, input.command);
       assert.equal(calls, 1);
-      const selected = await session.extensionRunner.emitUserBash({
+      const selected = await ownerSession.extensionRunner.emitUserBash({
         type: "user_bash",
         command: "custom-user",
         cwd: alternate,
         excludeFromContext: true,
       });
-      assert.equal(selected?.operations, customUser);
+      assert.ok(selected, "the earlier user executor was retained");
+      assert.equal(selected.operations, customUser);
       assert.equal(
         (
-          await session.executeBash("custom-user", undefined, {
-            operations: selected?.operations,
+          await ownerSession.executeBash("custom-user", undefined, {
+            operations: selected.operations,
             excludeFromContext: true,
           })
         ).output,
         "custom-user",
       );
-      assert.equal(session.getToolDefinition("bash"), custom);
+      assert.equal(ownerSession.getToolDefinition("bash"), custom);
       console.log(`ok: ${owner}-owned Bash and earlier user executor retained`);
     } finally {
-      await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
-      session.dispose();
+      await ownerSession.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+      ownerSession.dispose();
     }
   }
   // Selecting another directory must not grant trust to either project's settings.
@@ -447,19 +466,20 @@ try {
       mode: "print",
       onError: (error) => assert.fail(error.error),
     });
+    // oxlint-disable-next-line no-useless-undefined -- QX-003: signal is a required `AbortSignal | undefined` parameter.
     const context = untrusted.session.extensionRunner.createToolContext("trust", undefined);
-    await untrusted.session
-      .getToolDefinition("change_dir")!
-      .execute("select", { path: alternate }, undefined, undefined, context);
-    const result = await untrusted.session
-      .getToolDefinition("bash")!
-      .execute(
-        "trust",
-        { command: 'printf "%s\\n" "$PWD" "$CWD_TEST_PREFIX"' },
-        undefined,
-        undefined,
-        context,
-      );
+    const untrustedChangeDir = untrusted.session.getToolDefinition("change_dir");
+    assert.ok(untrustedChangeDir, "change_dir is registered");
+    await untrustedChangeDir.execute("select", { path: alternate }, undefined, undefined, context);
+    const untrustedBash = untrusted.session.getToolDefinition("bash");
+    assert.ok(untrustedBash, "bash is registered");
+    const result = await untrustedBash.execute(
+      "trust",
+      { command: 'printf "%s\\n" "$PWD" "$CWD_TEST_PREFIX"' },
+      undefined,
+      undefined,
+      context,
+    );
     assert.equal(
       result.content[0]?.type === "text" && result.content[0].text.trim(),
       `${alternate}\nglobal`,

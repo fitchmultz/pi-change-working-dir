@@ -10,10 +10,9 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { findPackageJSON } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import type { AssistantMessage, Message, ToolResultMessage } from "@earendil-works/pi-ai";
 import type {
   AgentSession as Session,
@@ -28,11 +27,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-const packageUrl = process.env.PI_PACKAGE_DIR
-  ? pathToFileURL(join(process.env.PI_PACKAGE_DIR, "dist/index.js")).href
-  : import.meta.resolve("@earendil-works/pi-coding-agent");
-const agentUrl = pathToFileURL(findPackageJSON("@earendil-works/pi-agent-core", packageUrl)!);
-const aiUrl = pathToFileURL(findPackageJSON("@earendil-works/pi-ai", packageUrl)!);
+import { host, loader, messages, authStorage, agentCore, ai, aiProvidersAll } from "./test-host.ts";
 const {
   AgentSession,
   SessionManager,
@@ -40,34 +35,19 @@ const {
   ModelRuntime,
   createReadTool,
   createEventBus,
-} = (await import(packageUrl)) as typeof import("@earendil-works/pi-coding-agent");
-const { createExtensionRuntime, loadExtensionFromFactory, loadExtensions } = (await import(
-  new URL("./core/extensions/loader.js", packageUrl).href
-)) as typeof import("./node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js");
-const { convertToLlm } = (await import(
-  new URL("./core/messages.js", packageUrl).href
-)) as typeof import("./node_modules/@earendil-works/pi-coding-agent/dist/core/messages.js");
-const { AuthStorage } = (await import(
-  new URL("./core/auth-storage.js", packageUrl).href
-)) as typeof import("./node_modules/@earendil-works/pi-coding-agent/dist/core/auth-storage.js");
-const { Agent } = (await import(
-  new URL("./dist/index.js", agentUrl).href
-)) as typeof import("@earendil-works/pi-agent-core");
-const { getModel } = (await import(
-  new URL("./dist/compat.js", aiUrl).href
-)) as typeof import("@earendil-works/pi-ai/compat");
+} = host;
+const { createExtensionRuntime, loadExtensionFromFactory, loadExtensions } = loader;
+const { convertToLlm } = messages;
+const { AuthStorage } = authStorage;
+const { Agent } = agentCore;
 const {
   fauxAssistantMessage,
   fauxToolCall,
   getCurrentSystemPrompt,
   getCurrentTools,
   createAssistantMessageEventStream,
-} = (await import(
-  new URL("./dist/index.js", aiUrl).href
-)) as typeof import("@earendil-works/pi-ai");
-const { registerCwdContext } = (await import(
-  new URL("./cwd-context.ts", import.meta.url).href
-)) as typeof import("./cwd-context.js");
+} = ai;
+import { registerCwdContext } from "./cwd-context.ts";
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "cwd-context-")));
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -84,8 +64,7 @@ const previousFetch = globalThis.fetch;
 globalThis.fetch = async () => {
   throw new Error("Context tests must not make network requests");
 };
-const model = structuredClone(getModel("openai", "gpt-6-astra"));
-assert.ok(model);
+const model = structuredClone(aiProvidersAll.getBuiltinModel("openai", "gpt-6-astra"));
 const selectedType = "test:selected-cwd",
   contextType = "change-working-dir:context";
 const fallbackNotice =
@@ -137,8 +116,8 @@ const nativeSystems = () =>
   manager
     .getBranch()
     .filter((entry) => entry.type === "message" && entry.message.role === "system");
-const cwdOf = (messages: Message[]) =>
-  getCurrentSystemPrompt(messages).match(/<cwd>\n([\s\S]*?)\n<\/cwd>/)?.[1];
+const cwdOf = (prompt: Message[]) =>
+  getCurrentSystemPrompt(prompt).match(/<cwd>\n([\s\S]*?)\n<\/cwd>/)?.[1];
 const current = () => item(requests, requests.length - 1);
 /** Checked index access: the surrounding assertions establish the element exists. */
 function item<T>(list: T[], index: number): T {
@@ -154,6 +133,7 @@ const prefix = (previous: Message[], later = current()) =>
 const factory: ExtensionFactory = (pi) => {
   pi.on("before_agent_start", (event) => {
     beforeStarts++;
+    // oxlint-disable-next-line no-param-reassign -- QX-001: the host documents systemPromptOptions as mutable here.
     event.systemPromptOptions.sections.unrelated = unrelatedSection;
   });
   let originalMessages: unknown, originalCopy: unknown;
@@ -217,13 +197,17 @@ const factory: ExtensionFactory = (pi) => {
     },
   });
   // Use the real compaction lifecycle, with a fixed summary instead of a provider call.
-  pi.on("session_before_compact", (_event, ctx) => ({
-    compaction: {
-      summary: "Earlier work summarized.",
-      firstKeptEntryId: compactFrom ?? ctx.sessionManager.getLeafId()!,
-      tokensBefore: 100,
-    },
-  }));
+  pi.on("session_before_compact", (_event, ctx) => {
+    const leafId = ctx.sessionManager.getLeafId();
+    assert.ok(leafId !== null, "the branch has a leaf");
+    return {
+      compaction: {
+        summary: "Earlier work summarized.",
+        firstKeptEntryId: compactFrom !== undefined ? compactFrom : leafId,
+        tokensBefore: 100,
+      },
+    };
+  });
 };
 
 async function makeSession(reason: SessionStartEvent["reason"] = "startup", realExtension = false) {
@@ -233,6 +217,7 @@ async function makeSession(reason: SessionStartEvent["reason"] = "startup", real
     realExtension
       ? (pi) => {
           pi.on("before_agent_start", (event) => {
+            // oxlint-disable-next-line no-param-reassign -- QX-001: the host documents systemPromptOptions as mutable here.
             event.systemPromptOptions.sections.unrelated = unrelatedSection;
           });
           pi.on("agent_before_settle", async (_event, ctx) => {
@@ -254,7 +239,7 @@ async function makeSession(reason: SessionStartEvent["reason"] = "startup", real
                 details: {
                   changed: change.isError,
                   readError: read.isError,
-                  receipt: read.result.details,
+                  receipt: read.result.details as unknown,
                 },
               };
             },
@@ -282,11 +267,15 @@ async function makeSession(reason: SessionStartEvent["reason"] = "startup", real
     getPrompts: () => ({ prompts: [], diagnostics: [] }),
     getThemes: () => ({ themes: [], diagnostics: [] }),
     getAgentsFiles: () => ({ agentsFiles: [] }),
+    // oxlint-disable-next-line no-useless-undefined -- QX-003: the loader contract requires a `string | undefined` return.
     getSystemPrompt: () => undefined,
+    // oxlint-disable-next-line no-useless-undefined -- QX-003: the loader contract requires a `string | undefined` return.
     getSystemPromptSource: () => undefined,
     getAppendSystemPrompt: () => [],
     getAppendSystemPromptSources: () => [],
+    // oxlint-disable-next-line no-empty-function -- QX-006: the loader contract mandates a no-op here.
     extendResources() {},
+    // oxlint-disable-next-line no-empty-function -- QX-006: the loader contract mandates a no-op here.
     async reload() {},
   };
   const credentials = AuthStorage.inMemory();
@@ -304,8 +293,8 @@ async function makeSession(reason: SessionStartEvent["reason"] = "startup", real
     initialState: { model, tools: [], messages: manager.buildSessionContext().messages },
     getApiKey: () => "fake-key-never-sent",
     convertToLlm,
-    transformContext: (messages) =>
-      ref.current ? ref.current.emitContext(messages) : Promise.resolve(messages),
+    transformContext: (prompt) =>
+      ref.current ? ref.current.emitContext(prompt) : Promise.resolve(prompt),
     streamFn: (_model, context) => {
       requests.push(structuredClone(context.messages));
       assert.ok(getCurrentSystemPrompt(context.messages).includes(unrelatedSection));
@@ -340,6 +329,7 @@ async function makeSession(reason: SessionStartEvent["reason"] = "startup", real
     extensionRunnerRef: ref,
     sessionStartEvent: { type: "session_start", reason },
   });
+  // oxlint-disable-next-line no-empty-function -- QX-006: the test ignores subscription events.
   session.subscribe(() => {});
   await session.bindExtensions({ onError: (error) => errors.push(error) });
   return session;
@@ -364,7 +354,8 @@ try {
   prefix(item(requests, 0), item(requests, 1));
   assert.equal(beforeStarts, 1);
   checks.push("idle /cwd before first prompt; same-loop change; exact prior request prefix");
-  const treeTarget = manager.getLeafId()!;
+  const treeTarget = manager.getLeafId();
+  assert.ok(treeTarget !== null, "the branch has a leaf");
   await session.prompt("continue at C");
   prefix(item(requests, 1));
   const nativeCount = nativeSystems().length,
@@ -485,7 +476,9 @@ try {
 
   // Retain the change itself: the new head must use the state BEFORE that snapshot.
   await session.prompt(`/cwd ${next}`);
-  compactFrom = snapshots().at(-1)!.id;
+  const retainFrom = snapshots().at(-1);
+  assert.ok(retainFrom, "the B transition snapshot exists");
+  compactFrom = retainFrom.id;
   await session.prompt("before retaining the B transition");
   await session.compact();
   await session.prompt("after retaining the B transition");
@@ -522,7 +515,7 @@ try {
     fauxAssistantMessage("changed"),
   );
   await session.prompt("real extension: change to C");
-  assert.equal(requests.length, requestsBeforeCommand + 2);
+  assert.equal(requests.length - requestsBeforeCommand, 2);
   assert.equal(cwdOf(item(requests, requestsBeforeCommand)), next);
   assert.equal(cwdOf(current()), third);
   prefix(item(requests, requestsBeforeCommand));
@@ -572,7 +565,10 @@ try {
       modelCwd: cwdOf(current()),
       snapshots: snapshots()
         .slice(beforeSnapshots)
-        .map((entry) => entry.details!.cwd),
+        .map((entry) => {
+          assert.ok(entry.details, "snapshot carries details");
+          return entry.details.cwd;
+        }),
     });
   }
   assert.deepEqual(
@@ -617,14 +613,13 @@ try {
     fauxAssistantMessage("read"),
   );
   await session.prompt("read the original file on the next turn");
-  const nextRead = current()
-    .filter(
-      (message): message is ToolResultMessage =>
-        message.role === "toolResult" && message.toolName === "read",
-    )
-    .at(-1);
-  assert.equal(nextRead?.isError, false);
-  const readBlock = nextRead?.content[0];
+  const nextRead = current().findLast(
+    (message): message is ToolResultMessage =>
+      message.role === "toolResult" && message.toolName === "read",
+  );
+  assert.ok(nextRead, "the read tool result exists");
+  assert.equal(nextRead.isError, false);
+  const readBlock = nextRead.content[0];
   assert.match(
     readBlock !== undefined && readBlock.type === "text" ? readBlock.text : "",
     /ORIGINAL/,
@@ -637,11 +632,12 @@ try {
   await session.prompt("establish C before settlement commands");
   const beforeSettlementSnapshots = snapshots().length;
   beforeSettle = async (ctx) => {
-    assert.equal(session!.agent.signal, undefined, "the low-level run has ended");
+    assert.ok(session, "the session is live during settlement");
+    assert.equal(session.agent.signal, undefined, "the low-level run has ended");
     assert.equal(ctx.isIdle(), false, "the session has not settled");
-    assert.equal(session!.isStreaming, true, "native custom messages still queue until settlement");
-    await session!.prompt(`/cwd ${next}`);
-    await session!.prompt(`/cwd ${third}`);
+    assert.equal(session.isStreaming, true, "native custom messages still queue until settlement");
+    await session.prompt(`/cwd ${next}`);
+    await session.prompt(`/cwd ${third}`);
   };
   await session.prompt("change directory while the session is settling");
   await session.prompt("continue after settlement commands");
@@ -653,7 +649,10 @@ try {
   assert.deepEqual(
     snapshots()
       .slice(beforeSettlementSnapshots)
-      .map((entry) => entry.details!.cwd),
+      .map((entry) => {
+        assert.ok(entry.details, "snapshot carries details");
+        return entry.details.cwd;
+      }),
     [next, third],
   );
   checks.push(
@@ -671,13 +670,14 @@ try {
     (message): message is ToolResultMessage =>
       message.role === "toolResult" && message.toolName === "nested_cwd",
   );
-  assert.equal(composed?.isError, false);
-  assert.partialDeepStrictEqual(composed?.details, {
+  assert.ok(composed, "the nested_cwd tool result exists");
+  assert.equal(composed.isError, false);
+  assert.partialDeepStrictEqual(composed.details, {
     changed: false,
     readError: false,
     receipt: { workingDirectory: next },
   });
-  const composedBlock = composed?.content[0];
+  const composedBlock = composed.content[0];
   assert.match(
     composedBlock !== undefined && composedBlock.type === "text" ? composedBlock.text : "",
     /NESTED_B/,
@@ -705,7 +705,11 @@ try {
 
   assert.deepEqual(errors, []);
   console.log(
-    `Context checks passed (${process.env.PI_PACKAGE_DIR ? "PI_PACKAGE_DIR" : "pinned package"}):\n- ${checks.join("\n- ")}`,
+    `Context checks passed (${
+      process.env.PI_PACKAGE_DIR !== undefined && process.env.PI_PACKAGE_DIR !== ""
+        ? "PI_PACKAGE_DIR"
+        : "pinned package"
+    }):\n- ${checks.join("\n- ")}`,
   );
 } finally {
   session?.dispose();
