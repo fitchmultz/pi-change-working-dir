@@ -204,7 +204,11 @@ const factory: ExtensionFactory = (pi) => {
   });
 };
 
-async function makeSession(reason: SessionStartEvent["reason"] = "startup", realExtension = false) {
+async function makeSession(
+  reason: SessionStartEvent["reason"] = "startup",
+  realExtension = false,
+  journal: { manager: typeof manager; cwd: string } = { manager, cwd },
+) {
   const runtime = createExtensionRuntime();
   const bus = createEventBus();
   const extension = await loadExtensionFromFactory(
@@ -240,7 +244,7 @@ async function makeSession(reason: SessionStartEvent["reason"] = "startup", real
           });
         }
       : factory,
-    cwd,
+    journal.cwd,
     bus,
     runtime,
   );
@@ -248,7 +252,7 @@ async function makeSession(reason: SessionStartEvent["reason"] = "startup", real
   if (realExtension) {
     const loaded = await loadExtensions(
       [fileURLToPath(new URL("./index.ts", import.meta.url))],
-      cwd,
+      journal.cwd,
       bus,
       runtime,
     );
@@ -284,7 +288,7 @@ async function makeSession(reason: SessionStartEvent["reason"] = "startup", real
   });
   const ref: { current?: ExtensionRunner } = {};
   const agent = new Agent({
-    initialState: { model, tools: [], messages: manager.buildSessionContext().messages },
+    initialState: { model, tools: [], messages: journal.manager.buildSessionContext().messages },
     getApiKey: () => "fake-key-never-sent",
     convertToLlm,
     transformContext: (prompt) =>
@@ -312,11 +316,11 @@ async function makeSession(reason: SessionStartEvent["reason"] = "startup", real
   });
   const session = new AgentSession({
     agent,
-    sessionManager: manager,
+    sessionManager: journal.manager,
     settingsManager: SettingsManager.inMemory({
       compaction: { enabled: false, keepRecentTokens: 1 },
     }),
-    cwd,
+    cwd: journal.cwd,
     modelRuntime,
     resourceLoader,
     ...(realExtension ? {} : { initialActiveToolNames: ["read"] }),
@@ -497,6 +501,36 @@ try {
   assert.equal(snapshots().length, 0);
   assert.equal(nativeSystems().length, initialNativeCount);
   checks.push("a new unchanged session needs no presentation snapshots");
+
+  // A forked child session: its own header and directory, then a copy of the parent's branch.
+  const parentRequest = current();
+  const forkFile = join(root, "fork.jsonl");
+  writeFileSync(
+    forkFile,
+    `${[SessionManager.create(third, root).getHeader(), ...manager.getBranch()].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+  );
+  const fork = SessionManager.open(forkFile);
+  const forkSnapshots = () =>
+    fork
+      .getBranch()
+      .filter(
+        (entry): entry is CustomMessageEntry<{ cwd: string }> =>
+          entry.type === "custom_message" && entry.customType === contextType,
+      )
+      .map((entry) => entry.details?.cwd);
+  session.dispose();
+  session = await makeSession("startup", false, { manager: fork, cwd: third });
+  await session.prompt("forked child in another directory");
+  prefix(parentRequest);
+  assert.equal(cwdOf(current()), third);
+  assert.deepEqual(forkSnapshots(), [third]);
+  compactFrom = undefined;
+  await session.compact();
+  await session.prompt("forked child after its own compaction");
+  assert.equal(cwdOf([item(current(), 0)]), third);
+  checks.push(
+    "a forked child in another directory keeps the parent's leading prompt, then records and keeps its own directory",
+  );
 
   session.dispose();
   manager.newSession();

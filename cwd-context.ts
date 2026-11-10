@@ -31,9 +31,14 @@ function snapshot(details: unknown): Snapshot | undefined {
   return { cwd, notice: typeof notice === "string" ? notice : undefined };
 }
 
+/** The directory section as Pi records it in a system message. */
+function cwdSection(cwd: string): string {
+  return `<cwd>\n${cwd}\n</cwd>`;
+}
+
 function sections(state: Snapshot): Record<string, string | null> {
   return {
-    cwd: `<cwd>\n${state.cwd}\n</cwd>`,
+    cwd: cwdSection(state.cwd),
     "change-working-dir":
       state.notice !== undefined
         ? `<change-working-dir>\n${state.notice}\n</change-working-dir>`
@@ -58,29 +63,52 @@ function lineageChanged(ctx: ExtensionContext, lineage: Lineage, nextLeaf: strin
   return cursor !== lineage.leaf;
 }
 
-/** The baseline snapshot to project into the leading system message. */
-function baselineFrom(ctx: ExtensionContext): Snapshot {
-  let baseline: Snapshot = { cwd: ctx.cwd };
-  const first = ctx.sessionManager.buildSessionProjection().entries[0]?.sourceEntry;
-  const cutoff = first?.type === "compaction" ? first.firstKeptEntryId : undefined;
-  if (cutoff === undefined) {
-    return baseline;
+type Branch = ReturnType<ExtensionContext["sessionManager"]["getBranch"]>;
+
+/**
+ * The directory section the journal started with: the one its first system message recorded.
+ * It is read from the journal, not from this process, so a copy of the journal that runs in
+ * another directory, such as a forked child session, starts from the same value as the original.
+ * A journal without a recorded section started in the session directory.
+ */
+function startSection(branch: Branch, sessionCwd: string): string {
+  for (const entry of branch) {
+    if (entry.type === "message" && entry.message.role === "system") {
+      return entry.message.sections?.cwd ?? cwdSection(sessionCwd);
+    }
   }
-  for (const entry of ctx.sessionManager.getBranch()) {
+  return cwdSection(sessionCwd);
+}
+
+/** The last context snapshot saved before the entry `cutoff`; the whole branch when no entry was kept. */
+function snapshotBefore(branch: Branch, cutoff: string | null): Snapshot | undefined {
+  let earlier: Snapshot | undefined;
+  for (const entry of branch) {
     if (entry.id === cutoff) {
       break;
     }
     if (entry.type === "custom_message" && entry.customType === CONTEXT_TYPE) {
-      baseline = snapshot(entry.details) ?? baseline;
+      earlier = snapshot(entry.details) ?? earlier;
     }
   }
-  return baseline;
+  return earlier;
+}
+
+/** The sections to project into the leading system message: the directory before its window. */
+function baselineFrom(ctx: ExtensionContext): Record<string, string | null> {
+  const branch = ctx.sessionManager.getBranch();
+  const first = ctx.sessionManager.buildSessionProjection().entries[0]?.sourceEntry;
+  const earlier =
+    first?.type === "compaction" ? snapshotBefore(branch, first.firstKeptEntryId) : undefined;
+  return earlier === undefined
+    ? { cwd: startSection(branch, ctx.cwd), "change-working-dir": null }
+    : sections(earlier);
 }
 
 /** The most recent context snapshot in the branch, if any. */
-function latestSnapshot(session: ExtensionContext["sessionManager"]): Snapshot | undefined {
+function latestSnapshot(branch: Branch): Snapshot | undefined {
   let previous: Snapshot | undefined;
-  for (const entry of session.getBranch()) {
+  for (const entry of branch) {
     if (entry.type === "custom_message" && entry.customType === CONTEXT_TYPE) {
       previous = snapshot(entry.details) ?? previous;
     }
@@ -88,15 +116,18 @@ function latestSnapshot(session: ExtensionContext["sessionManager"]): Snapshot |
   return previous;
 }
 
-/** Whether a restore duplicates the last recorded snapshot and can be skipped. */
+/**
+ * Whether a restore duplicates what the journal already says and can be skipped: its last
+ * snapshot, or without one the directory it started with.
+ */
 function shouldSuppress(
   previous: Snapshot | undefined,
   cwd: string,
   notice: string | undefined,
-  sessionCwd: string,
+  start: string,
 ): boolean {
   if (previous === undefined) {
-    return cwd === sessionCwd && notice === undefined;
+    return cwdSection(cwd) === start && notice === undefined;
   }
   return previous.cwd === cwd && previous.notice === notice;
 }
@@ -107,7 +138,7 @@ export function registerCwdContext(
   currentCwd: (ctx: ExtensionContext) => string,
 ): (ctx: ExtensionContext, cwd: string, record?: CwdRecord) => void {
   let lineage: Lineage = { manager: undefined, leaf: null };
-  let baseline: Snapshot = { cwd: "" };
+  let baseline: Record<string, string | null> = {};
 
   pi.on("before_agent_start", (event, ctx) => {
     // oxlint-disable-next-line no-param-reassign -- QX-001: the host documents systemPromptOptions as mutable during this event.
@@ -139,7 +170,7 @@ export function registerCwdContext(
           }
         }
         if (index === 0 && message.role === "system") {
-          return { ...message, sections: { ...message.sections, ...sections(baseline) } };
+          return { ...message, sections: { ...message.sections, ...baseline } };
         }
         return message;
       }),
@@ -149,11 +180,11 @@ export function registerCwdContext(
   return (ctx, cwd, record) => {
     // Validated changes may still be queued; only restores can deduplicate against branch history.
     const notice = record?.notice;
-    if (
-      record?.changed !== true &&
-      shouldSuppress(latestSnapshot(ctx.sessionManager), cwd, notice, ctx.cwd)
-    ) {
-      return;
+    if (record?.changed !== true) {
+      const branch = ctx.sessionManager.getBranch();
+      if (shouldSuppress(latestSnapshot(branch), cwd, notice, startSection(branch, ctx.cwd))) {
+        return;
+      }
     }
     pi.sendMessage(
       { customType: CONTEXT_TYPE, content: "", display: false, details: { cwd, notice } },
