@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Return the host tool's own error when a part of a `read`, `grep`, `ls`, or `find` target does not exist. The adapter raised its own `stat` error before the host tool ran, so a host that adds a hint to that error (the nearest existing directory and its closest names) never reached the model. On official Pi the text changes from `ENOENT: no such file or directory, stat '<path>'` to the native form: `ENOENT: no such file or directory, access '<path>'` for `read`, `Path not found: <path>` for `ls` and `grep`, and the `fd` message for `find`.
 - Tell the model to put `change_dir` first in the same response as the calls that need the new directory. The previous guideline read as "send it alone", which cost one model request per directory change.
 - Adopt Strict Oxlint and Oxfmt Engineering Standard v5.1.2: qualified toolchain (oxlint 1.90.0 with the type-aware checker, oxfmt 0.75.0), policy verification against the adopted baseline, typed production modules with zero lint findings, repaired test sources, a runtime-generated qualification harness, and the lint gate in acceptance.
 

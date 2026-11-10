@@ -198,7 +198,11 @@ try {
   for (const path of ["same.txt", pathToFileURL(join(target, "same.txt")).href]) {
     assert.match(text(await execute(session, "read", { path })), /TARGET/);
   }
-  await assert.rejects(() => execute(session, "read", { path: "@same.txt" }), { code: "ENOENT" });
+  // A literal leading @ stays in the name: the missing @same.txt is reported, same.txt is not read.
+  await assert.rejects(
+    () => execute(session, "read", { path: "@same.txt" }),
+    /ENOENT[^\n]*@same\.txt'/,
+  );
   const image = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jBfkAAAAASUVORK5CYII=",
     "base64",
