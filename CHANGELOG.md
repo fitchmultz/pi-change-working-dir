@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Tell the model to put `change_dir` first in the same response as the calls that need the new directory. The previous guideline read as "send it alone", which cost one model request per directory change.
 - Adopt Strict Oxlint and Oxfmt Engineering Standard v5.1.2: qualified toolchain (oxlint 1.90.0 with the type-aware checker, oxfmt 0.75.0), policy verification against the adopted baseline, typed production modules with zero lint findings, repaired test sources, a runtime-generated qualification harness, and the lint gate in acceptance.
 
 ## 0.6.0 - 2026-10-01

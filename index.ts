@@ -314,7 +314,7 @@ function registerChangeDir(pi: ExtensionAPI, selection: ReturnType<typeof create
       "Change the directory for subsequent file, shell, search, edit, and cooperating extension calls. Persists on this session branch. Accepts absolute, ~, or relative paths. Project settings and session identity stay unchanged.",
     promptSnippet: "Change the working directory for subsequent tool calls",
     promptGuidelines: [
-      "Use change_dir once before dependent tools when moving to another directory. Direct sibling calls run in source order; never put change_dir in an explicit parallel batch.",
+      "To work in another directory, put change_dir first in the same response as the calls that need it. That response's calls run one at a time in the order written; if change_dir fails, the later calls are skipped. In a script, await change_dir before dependent calls; never put it in a parallel wrapper such as Promise.all.",
     ],
     parameters: Type.Object(
       { path: Type.String({ minLength: 1, description: "Directory to switch to" }) },

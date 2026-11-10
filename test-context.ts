@@ -1,6 +1,7 @@
 /** Native request/branch regression checks; PI_PACKAGE_DIR optionally selects a fork installation. */
 import assert from "node:assert/strict";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -620,6 +621,38 @@ try {
   checks.push(
     "failed change_dir does not let a sibling overwrite a file in the original directory",
   );
+
+  responses.push(
+    fauxAssistantMessage(
+      [
+        fauxToolCall("change_dir", { path: next }),
+        fauxToolCall("write", { path: "sibling.txt", content: "IN B\n" }),
+        fauxToolCall("bash", { command: "pwd" }),
+      ],
+      { stopReason: "toolUse" },
+    ),
+    fauxAssistantMessage("finished"),
+  );
+  await session.prompt("change to B, then write a file and run a command there");
+  const sharedBatch = current()
+    .filter((message): message is ToolResultMessage => message.role === "toolResult")
+    .slice(-3);
+  assert.deepEqual(
+    sharedBatch.map((message) => [message.toolName, message.isError]),
+    [
+      ["change_dir", false],
+      ["write", false],
+      ["bash", false],
+    ],
+  );
+  assert.equal(readFileSync(join(next, "sibling.txt"), "utf8"), "IN B\n");
+  assert.equal(existsSync(join(cwd, "sibling.txt")), false);
+  const pwdBlock = item(sharedBatch, 2).content[0];
+  assert.equal(
+    pwdBlock !== undefined && pwdBlock.type === "text" ? pwdBlock.text.trim() : "",
+    next,
+  );
+  checks.push("calls after change_dir in the same response run in the new directory");
 
   await session.prompt(`/cwd ${third}`);
   await session.prompt("establish C before settlement commands");

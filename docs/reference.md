@@ -7,7 +7,9 @@ This page covers execution details and the public interface for extension author
 - **Agent:** `change_dir({ path: "../worktrees/feature-x" })`, then relative paths and ordinary shell commands.
 - **User:** `/cwd <path>` changes directory, `/cwd` shows it, and `/cwd -` returns to this run's original directory.
 
-Absolute paths, `~`, and relative paths are supported. Targets must be accessible directories; symlinks are canonicalized and control-character names are rejected. Direct sibling tools run in source order. Do not place `change_dir` inside an explicit parallel wrapper.
+Absolute paths, `~`, and relative paths are supported. Targets must be accessible directories; symlinks are canonicalized and control-character names are rejected.
+
+`change_dir` can share a response with the calls that need the new directory. Put it first: Pi runs the calls of that response one at a time in source order, so the later calls use the new directory. Do not place `change_dir` inside an explicit parallel wrapper.
 
 Directory changes affect execution. Project settings, trust, AGENTS.md, skills, loaded extensions, session identity, and session storage remain attached to the original project. Use Pi's session/project controls when you intend to change those resources too.
 
