@@ -21,6 +21,9 @@ import { host } from "./test-host.ts";
 const {
   createAgentSession,
   createEditToolDefinition,
+  createFindToolDefinition,
+  createGrepToolDefinition,
+  createLsToolDefinition,
   createReadToolDefinition,
   createWriteToolDefinition,
   DefaultResourceLoader,
@@ -98,6 +101,21 @@ const text = (result: Awaited<ReturnType<typeof execute>>) =>
     .join("\n")
     .trimEnd();
 const addressed = (suffix: string) => `${root}${sep}${suffix}`;
+/** The error a failing call rejects with; a call that resolves fails the test. */
+async function rejection(call: () => Promise<unknown>): Promise<Error> {
+  try {
+    await call();
+  } catch (error) {
+    assert.ok(error instanceof Error);
+    return error;
+  }
+  return assert.fail("the call must reject");
+}
+/** The string `code` of a filesystem error. */
+const codeOf = (error: unknown): string | undefined =>
+  error instanceof Error && "code" in error && typeof error.code === "string"
+    ? error.code
+    : undefined;
 
 try {
   await session.bindExtensions({ onError: (error) => assert.fail(error.error) });
@@ -573,13 +591,85 @@ try {
       ["grep", { pattern: "." }],
     ] as const) {
       if (nativeError !== undefined) {
-        await assert.rejects(() => execute(name, { path: suffix, ...extra }));
+        const failure = await rejection(() => execute(name, { path: suffix, ...extra }));
+        // Each tool reports the system's failure; none opens a lexical neighbour instead.
+        const code = codeOf(nativeError);
+        assert.ok(code !== undefined && failure.message.includes(code), failure.message);
       }
     }
     if (nativeError !== undefined) {
       await assert.rejects(() => execute("change_dir", { path: suffix }));
     }
   }
+  // A missing target reaches the host's own tool, so its error for the bound target is the
+  // result. The host's tool alone, given that target, is the oracle for the text.
+  const hostFailures: ReadonlyArray<
+    [name: string, extra: Record<string, unknown>, alone: (path: string) => Promise<unknown>]
+  > = [
+    [
+      "read",
+      {},
+      async (path) =>
+        createReadToolDefinition(root).execute("host", { path }, undefined, undefined, ctx),
+    ],
+    [
+      "ls",
+      {},
+      async (path) =>
+        createLsToolDefinition(root).execute("host", { path }, undefined, undefined, ctx),
+    ],
+    [
+      "find",
+      { pattern: "*" },
+      async (path) =>
+        createFindToolDefinition(root).execute(
+          "host",
+          { path, pattern: "*" },
+          undefined,
+          undefined,
+          ctx,
+        ),
+    ],
+    [
+      "grep",
+      { pattern: "." },
+      async (path) =>
+        createGrepToolDefinition(root).execute(
+          "host",
+          { path, pattern: "." },
+          undefined,
+          undefined,
+          ctx,
+        ),
+    ],
+  ];
+  const apostropheDir = join(root, "developer's-project");
+  const missingTargets: ReadonlyArray<[selected: string, requested: string, target: string]> = [
+    [root, `absent-dir${sep}absent.txt`, join(root, "absent-dir", "absent.txt")],
+    [join(root, "final-path"), "absent.txt", join(root, "final-path", "absent.txt")],
+    // Dot segments through directories that exist resolve as the system resolves them.
+    [root, `link${sep}..${sep}absent.txt`, join(expectedDir, "absent.txt")],
+    [root, `absent-dir${sep}`, join(root, "absent-dir")],
+    [apostropheDir, "absent.txt", join(apostropheDir, "absent.txt")],
+  ];
+  for (const [selected, requested, target] of missingTargets) {
+    await execute("change_dir", { path: selected });
+    for (const [name, extra, alone] of hostFailures) {
+      const expected = await rejection(() => alone(target));
+      const failure = await rejection(() => execute(name, { path: requested, ...extra }));
+      assert.equal(failure.message, expected.message, `${name} ${requested}`);
+      assert.ok(failure.message.includes(target), failure.message);
+    }
+  }
+  // The host's read variants rewrite the whole path. A missing file never becomes the file of
+  // the same name in a neighbour of the selected directory.
+  writeFileSync(join(root, "developer\u2019s-project", "neighbor-only.txt"), "WRONG_PROJECT");
+  await execute("change_dir", { path: apostropheDir });
+  assert.equal(
+    codeOf(await rejection(() => execute("read", { path: "neighbor-only.txt" }))),
+    "ENOENT",
+  );
+  await execute("change_dir", { path: root });
   for (const [index, suffix] of [`file.txt${sep}`, `file.txt${sep}..${sep}file.txt`].entries()) {
     const native = join(root, `native-write-${index}`),
       adapted = join(root, `adapted-write-${index}`);

@@ -13,8 +13,14 @@ import type {
 import { pathToFileURL } from "node:url";
 import type { Static, TSchema } from "typebox";
 import { mutationDelegate, type DelegatedExecution } from "./mutation-delegate.ts";
-import { assertAvailable, bindPath, isRecord, operationPath, readTarget } from "./native-paths.ts";
-import { realpath, stat } from "node:fs/promises";
+import {
+  assertAvailable,
+  bindPath,
+  isRecord,
+  operationPath,
+  readTarget,
+  searchTarget,
+} from "./native-paths.ts";
 import type { Selection } from "./selection.ts";
 
 const DEFAULT_PATH_TOOLS = new Set(["ls", "grep", "find"]);
@@ -136,11 +142,6 @@ function isMutation(name: string): boolean {
   return name === "write" || name === "edit";
 }
 
-async function statThenRealpath(path: string): Promise<string> {
-  const [, resolved] = await Promise.all([stat(path), realpath(path)]);
-  return resolved;
-}
-
 /** A context whose cwd is the captured directory, for native tool execution. */
 function executionDirectory(ctx: ExtensionToolContext, cwd: string): ExtensionToolContext {
   // oxlint-disable-next-line no-unsafe-type-assertion -- QX-004: prototype inheritance keeps live host getters; only Object.create expresses that view of the context.
@@ -243,10 +244,10 @@ async function prepareExecution(
     return { delegatedPath: delegated.delegatedPath, delegatedExecute: delegated.execute };
   }
   const request = requestedPath === undefined ? path : readRequest(invocation, requestedPath);
-  const resolved =
-    definition.name === "read" ? await readTarget(request, cwd) : await statThenRealpath(path);
-  showTarget(resolved);
-  return { delegatedPath: pathToFileURL(resolved).href, delegatedExecute: undefined };
+  const target =
+    definition.name === "read" ? await readTarget(request, cwd) : await searchTarget(path);
+  showTarget(target);
+  return { delegatedPath: pathToFileURL(target).href, delegatedExecute: undefined };
 }
 
 /** Generated summaries and hints can carry delegated URLs; rewrite only those. */

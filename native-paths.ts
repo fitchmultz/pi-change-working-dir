@@ -7,7 +7,7 @@ import {
   statSync,
   type Stats,
 } from "node:fs";
-import { realpath, stat } from "node:fs/promises";
+import { access, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -79,32 +79,107 @@ export const operationPath = (path: string, cwd: string): string => {
 export const bindPath = (path: unknown, cwd: string): unknown =>
   typeof path === "string" && path !== "" ? operationPath(path, cwd) : path;
 
+/** The canonical target of a path, validated by native traversal before canonicalization. */
+async function existingTarget(path: string): Promise<string> {
+  const [, resolved] = await Promise.all([stat(path), realpath(path)]);
+  return resolved;
+}
+
+/**
+ * The target of a path whose lookup failed because a part of it does not exist: the canonical
+ * directory that exists, then the missing names below it. The hosts normalize a path lexically
+ * before they open it; this form is the one that means the same to them and to the filesystem.
+ * Undefined for any other failure, and when a dot segment follows a missing name: that path has
+ * no such form.
+ */
+async function missingTarget(path: string, failure: unknown): Promise<string | undefined> {
+  if (errorCode(failure) !== "ENOENT") {
+    return undefined;
+  }
+  const names: string[] = [];
+  let prefix = path;
+  for (;;) {
+    const name = basename(prefix);
+    const parent = dirname(prefix);
+    if (name === "." || name === ".." || parent === prefix) {
+      return undefined;
+    }
+    names.unshift(name);
+    try {
+      return join(await existingTarget(parent), ...names);
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT") {
+        return undefined;
+      }
+      prefix = parent;
+    }
+  }
+}
+
+/**
+ * The target to hand the host for a search path: canonical when it exists. A target with a
+ * missing part also goes to the host, so that the host's own tool reports it. Every other
+ * failure throws as the operating system reported it.
+ */
+export async function searchTarget(path: string): Promise<string> {
+  try {
+    return await existingTarget(path);
+  } catch (error) {
+    const missing = await missingTarget(path, error);
+    if (missing === undefined) {
+      throw error;
+    }
+    return missing;
+  }
+}
+
+/** The spellings the hosts' private read-path helper tries for one path, in its order. */
+function readVariants(path: string): string[] {
+  const nfd = path.normalize("NFD");
+  return [
+    path,
+    path.replace(/ (AM|PM)\./gi, "\u202f$1."),
+    nfd,
+    path.replace(/'/g, "\u2019"),
+    nfd.replace(/'/g, "\u2019"),
+  ];
+}
+
+/** Whether the host would read an existing file of another spelling in place of a missing target. */
+async function readsAnotherFile(missing: string): Promise<boolean> {
+  const others = readVariants(missing).filter((variant) => variant !== missing);
+  const found = await Promise.all(
+    others.map(async (variant) =>
+      access(variant).then(
+        () => true,
+        () => false,
+      ),
+    ),
+  );
+  return found.includes(true);
+}
+
 // The hosts' read-path helper is private. Apply its ordered variants to the request
 // before binding to cwd, then validate native traversal before canonicalization.
+// When no variant exists, the missing target goes to the host as a search target does,
+// unless the host's variants of the whole path would then read a file outside the request.
 export async function readTarget(requested: string, cwd: string): Promise<string> {
   const path = requested.startsWith("file://") ? fileURLToPath(requested) : requested;
-  const spaced = path.replace(UNICODE_SPACES, " ");
-  const nfd = spaced.normalize("NFD");
-  const variants = new Set([
-    path,
-    spaced,
-    spaced.replace(/ (AM|PM)\./gi, "\u202f$1."),
-    nfd,
-    spaced.replace(/'/g, "\u2019"),
-    nfd.replace(/'/g, "\u2019"),
-  ]);
+  const variants = new Set([path, ...readVariants(path.replace(UNICODE_SPACES, " "))]);
   let failure: unknown;
   for (const variant of variants) {
-    const candidate = operationPath(variant, cwd);
     try {
-      const [, resolved] = await Promise.all([stat(candidate), realpath(candidate)]);
-      return resolved;
+      return await existingTarget(operationPath(variant, cwd));
     } catch (error) {
       failure ??= error;
       continue;
     }
   }
-  throw firstFailure(failure, requested);
+  const missing = await missingTarget(operationPath(path, cwd), failure);
+  if (missing === undefined || (await readsAnotherFile(missing))) {
+    throw firstFailure(failure, requested);
+  }
+  return missing;
 }
 
 /** The first failing variant's error is the operator-meaningful one; preserve its identity. */
