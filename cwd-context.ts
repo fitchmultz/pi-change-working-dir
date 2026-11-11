@@ -9,11 +9,6 @@ const CONTEXT_TYPE = "change-working-dir:context";
 
 type Snapshot = { cwd: string; notice?: string | undefined };
 
-type Lineage = {
-  manager: ExtensionContext["sessionManager"] | undefined;
-  leaf: string | null;
-};
-
 type Messages = ContextWithSystemEvent["messages"];
 
 type DirectoryUpdate = Extract<Messages[number], { role: "system" }>;
@@ -24,6 +19,13 @@ type Carried = {
   leading: Record<string, string | null>;
   /** The last directory update that a compaction removed from the window, if there is one. */
   update: DirectoryUpdate | undefined;
+};
+
+/** The carried sections and the journal prefix they were read from. */
+type PrefixCache = {
+  manager: ExtensionContext["sessionManager"];
+  leaf: string | null;
+  sections: Carried;
 };
 
 export type CwdRecord = {
@@ -77,21 +79,32 @@ function updateOf(message: Messages[number]): DirectoryUpdate | undefined {
   return state === undefined ? undefined : directoryUpdate(state, message.timestamp);
 }
 
-/** Whether the ancestry from the leaf still reaches the last projected entry. */
-function lineageChanged(ctx: ExtensionContext, lineage: Lineage, nextLeaf: string | null): boolean {
+/** Whether the ancestry from the leaf still reaches the prefix the cache was read from. */
+function continues(cache: PrefixCache, ctx: ExtensionContext, leaf: string | null): boolean {
   const session = ctx.sessionManager;
-  if (session !== lineage.manager) {
-    return true;
+  if (session !== cache.manager) {
+    return false;
   }
-  let cursor: string | null = nextLeaf;
-  while (cursor !== null && cursor !== lineage.leaf) {
+  let cursor: string | null = leaf;
+  while (cursor !== null && cursor !== cache.leaf) {
     const entry = session.getEntry(cursor);
     if (entry === undefined || entry.type === "compaction") {
-      return true;
+      return false;
     }
     cursor = entry.parentId;
   }
-  return cursor !== lineage.leaf;
+  return cursor === cache.leaf;
+}
+
+/**
+ * The carried sections for this request. Only new ancestry is inspected: the journal is read
+ * again after a compaction, a branch change, or a restore, never on every provider request.
+ */
+function refreshPrefix(cache: PrefixCache | undefined, ctx: ExtensionContext): PrefixCache {
+  const leaf = ctx.sessionManager.getLeafId();
+  const sections =
+    cache !== undefined && continues(cache, ctx, leaf) ? cache.sections : carriedFrom(ctx);
+  return { manager: ctx.sessionManager, leaf, sections };
 }
 
 type Branch = ReturnType<ExtensionContext["sessionManager"]["getBranch"]>;
@@ -228,8 +241,7 @@ export function registerCwdContext(
   pi: ExtensionAPI,
   currentCwd: (ctx: ExtensionContext) => string,
 ): (ctx: ExtensionContext, cwd: string, record?: CwdRecord) => void {
-  let lineage: Lineage = { manager: undefined, leaf: null };
-  let carried: Carried = { leading: {}, update: undefined };
+  let prefix: PrefixCache | undefined;
 
   pi.on("before_agent_start", (event, ctx) => {
     // oxlint-disable-next-line no-param-reassign -- QX-001: the host documents systemPromptOptions as mutable during this event.
@@ -240,14 +252,8 @@ export function registerCwdContext(
   });
 
   pi.on("context_with_system", (event, ctx) => {
-    const nextLeaf = ctx.sessionManager.getLeafId();
-    // Inspect only new ancestry. Rebuild on compaction, branch changes, or restore,
-    // never scan the entire journal on every provider request.
-    if (lineageChanged(ctx, lineage, nextLeaf)) {
-      carried = carriedFrom(ctx);
-    }
-    lineage = { manager: ctx.sessionManager, leaf: nextLeaf };
-    return { messages: present(event.messages, carried) };
+    prefix = refreshPrefix(prefix, ctx);
+    return { messages: present(event.messages, prefix.sections) };
   });
 
   return (ctx, cwd, record) => {
