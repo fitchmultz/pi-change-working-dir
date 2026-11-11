@@ -680,10 +680,38 @@ try {
   assert.equal(cwdOf(afterBlock), next);
   await session.prompt("continue after the summary block");
   prefix(afterBlock);
+  checks.push(
+    "after a compaction with a provider summary block the kept messages follow the block; the directory update follows the summary and keeps its place",
+  );
+
+  // A directory change among the kept messages is the one in effect.
+  session.dispose();
+  manager.newSession();
+  session = await makeSession();
+  await session.prompt("before any directory change");
+  await session.prompt(`/cwd ${next}`);
+  await session.prompt("work that the block summarizes");
+  const keptReply = manager
+    .getBranch()
+    .findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
+  assert.ok(keptReply, "the kept reply exists");
+  compactFrom = keptReply.id;
+  await session.prompt(`/cwd ${third}`);
+  await session.prompt("work that the compaction keeps");
+  // The kept messages: the reply, the change to C, the prompt and its reply.
+  summaryBlockKept = 4;
+  await session.compact();
+  await session.prompt("first request after the summary block");
+  assert.deepEqual(
+    cwdTrail(current()),
+    [cwd, third],
+    "the update from before the window is not sent after a newer one among the kept messages",
+  );
+  assert.equal(cwdOf(current()), third);
   compactFrom = undefined;
   summaryBlockKept = undefined;
   checks.push(
-    "after a compaction with a provider summary block the kept messages follow the block; the directory update follows the summary and keeps its place",
+    "a directory change among the kept messages of a provider summary block stays the directory in effect",
   );
 
   session.dispose();

@@ -149,7 +149,8 @@ function carriedFrom(ctx: ExtensionContext): Carried {
  *
  * A context that starts with a provider summary block is the exception. The provider keeps the
  * reasoning of the kept turns only while they follow the block directly, so the update carried
- * over that compaction goes behind them: directly after the compaction summary.
+ * over that compaction goes behind them: directly after the compaction summary. A directory that
+ * the kept turns state themselves is newer, so the carried update is then not sent.
  */
 function present(messages: Messages, carried: Carried): Messages {
   const conversation = messages.findIndex(
@@ -164,16 +165,26 @@ function present(messages: Messages, carried: Carried): Messages {
   if (first === undefined) {
     return later;
   }
-  const startsWithSummaryBlock = "providerSummary" in first && first.providerSummary !== undefined;
-  const beforeUpdate = startsWithSummaryBlock
-    ? later.findLastIndex((message) => message.role === "compactionSummary") + 1
-    : 0;
+  const lead = { ...first, sections: { ...first.sections, ...carried.leading } };
+  if (carried.update === undefined) {
+    return [lead, ...others, ...later];
+  }
+  if (!("providerSummary" in first) || first.providerSummary === undefined) {
+    return [lead, ...others, carried.update, ...later];
+  }
+  const kept = later.slice(
+    0,
+    later.findLastIndex((message) => message.role === "compactionSummary") + 1,
+  );
+  const keptStateDirectory = kept.some(
+    (message) => message.role === "system" && message.sections?.cwd !== undefined,
+  );
   return [
-    { ...first, sections: { ...first.sections, ...carried.leading } },
+    lead,
     ...others,
-    ...later.slice(0, beforeUpdate),
-    ...(carried.update === undefined ? [] : [carried.update]),
-    ...later.slice(beforeUpdate),
+    ...kept,
+    ...(keptStateDirectory ? [] : [carried.update]),
+    ...later.slice(kept.length),
   ];
 }
 
