@@ -146,6 +146,11 @@ function carriedFrom(ctx: ExtensionContext): Carried {
  * place. The updates from before the conversation, carried over a compaction or saved before the
  * first prompt, go directly after the leading system messages: behind the prompt and the tool
  * changes a compaction keeps there, and in front of everything that changes with the window.
+ *
+ * A context that starts with a provider summary block is the exception. The provider keeps the
+ * reasoning of the kept turns only while they follow the block directly, so the update carried
+ * over that compaction goes behind them: directly after the compaction summary. A directory that
+ * the kept turns state themselves is newer, so the carried update is then not sent.
  */
 function present(messages: Messages, carried: Carried): Messages {
   const conversation = messages.findIndex(
@@ -160,11 +165,26 @@ function present(messages: Messages, carried: Carried): Messages {
   if (first === undefined) {
     return later;
   }
+  const lead = { ...first, sections: { ...first.sections, ...carried.leading } };
+  if (carried.update === undefined) {
+    return [lead, ...others, ...later];
+  }
+  if (!("providerSummary" in first) || first.providerSummary === undefined) {
+    return [lead, ...others, carried.update, ...later];
+  }
+  const kept = later.slice(
+    0,
+    later.findLastIndex((message) => message.role === "compactionSummary") + 1,
+  );
+  const keptStateDirectory = kept.some(
+    (message) => message.role === "system" && message.sections?.cwd !== undefined,
+  );
   return [
-    { ...first, sections: { ...first.sections, ...carried.leading } },
+    lead,
     ...others,
-    ...(carried.update === undefined ? [] : [carried.update]),
-    ...later,
+    ...kept,
+    ...(keptStateDirectory ? [] : [carried.update]),
+    ...later.slice(kept.length),
   ];
 }
 
