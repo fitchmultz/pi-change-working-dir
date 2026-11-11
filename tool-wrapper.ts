@@ -210,7 +210,7 @@ function admitInvocation(
   if (!isRecord(value)) {
     throw new Error("Expected tool arguments");
   }
-  deps.selection.initialize(ctx);
+  deps.selection.attach(ctx);
   const invocation =
     deps.invocations.get(value) ?? deps.bind(name, value, deps.selection.current(ctx));
   const requestedPath = PATH_TOOLS.has(name) ? pathArgument(value) : undefined;
