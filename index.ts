@@ -288,7 +288,7 @@ function registerAdmission(deps: AdmissionDeps): void {
     const owner = ownedTools.get(event.toolName);
     const installed = pi.getAllTools().find((tool) => tool.name === event.toolName);
     if (owner !== undefined && installed?.sourceInfo.path === owner) {
-      binder.bind(event.toolName, event.input, selection.current(ctx));
+      binder.admit(event.toolName, event.input, ctx);
     }
     return;
   });
