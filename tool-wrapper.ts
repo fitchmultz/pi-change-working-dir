@@ -3,6 +3,7 @@ import type {
   AgentToolUpdateCallback,
   BashToolDetails,
   EditToolDetails,
+  ExtensionContext,
   ExtensionToolContext,
   FindToolDetails,
   GrepToolDetails,
@@ -75,14 +76,13 @@ export type ToolBinder = {
   wrap: <TParams extends TSchema, TDetails extends WrappedDetails, TState>(
     definition: ToolDefinition<TParams, TDetails, TState>,
   ) => ToolDefinition<TParams, TDetails | WorkingDetails, TState & RenderState>;
-  bind: (name: string, input: object, cwd: string) => Invocation;
+  /** Admit a call, binding its path arguments once and fixing the directory for its execution. */
+  admit: (name: string, input: object, ctx: ExtensionContext) => Invocation;
   dispose: () => void;
 };
 
 type BinderDeps = {
-  selection: Selection;
-  bind: (name: string, input: object, cwd: string) => Invocation;
-  invocations: WeakMap<object, Invocation>;
+  admit: (name: string, input: object, ctx: ExtensionContext) => Invocation;
   renderCalls: Map<string, RenderContext>;
 };
 
@@ -210,9 +210,7 @@ function admitInvocation(
   if (!isRecord(value)) {
     throw new Error("Expected tool arguments");
   }
-  deps.selection.attach(ctx);
-  const invocation =
-    deps.invocations.get(value) ?? deps.bind(name, value, deps.selection.current(ctx));
+  const invocation = deps.admit(name, value, ctx);
   const requestedPath = PATH_TOOLS.has(name) ? pathArgument(value) : undefined;
   return {
     cwd: invocation.cwd,
@@ -403,7 +401,15 @@ export function createToolBinder(selection: Selection): ToolBinder {
   const renderCalls = new Map<string, RenderContext>();
   const bind = (name: string, input: object, cwd: string): Invocation =>
     bindInvocation(invocations, name, input, cwd);
-  const deps: BinderDeps = { selection, bind, invocations, renderCalls };
+  /**
+   * Admission is the only transition to a bound call: the first admission fixes its directory,
+   * so a later selection change cannot move a call that is already in flight.
+   */
+  const admit = (name: string, input: object, ctx: ExtensionContext): Invocation => {
+    selection.attach(ctx);
+    return invocations.get(input) ?? bind(name, input, selection.current(ctx));
+  };
+  const deps: BinderDeps = { admit, renderCalls };
 
   const wrap = <TParams extends TSchema, TDetails extends WrappedDetails, TState>(
     definition: ToolDefinition<TParams, TDetails, TState>,
@@ -475,5 +481,5 @@ export function createToolBinder(selection: Selection): ToolBinder {
     };
   };
 
-  return { wrap, bind, dispose: () => renderCalls.clear() };
+  return { wrap, admit, dispose: () => renderCalls.clear() };
 }
