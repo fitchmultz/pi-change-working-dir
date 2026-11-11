@@ -1,4 +1,8 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ContextWithSystemEvent,
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { isRecord } from "./native-paths.ts";
 
 const CONTEXT_TYPE = "change-working-dir:context";
@@ -8,6 +12,18 @@ type Snapshot = { cwd: string; notice?: string | undefined };
 type Lineage = {
   manager: ExtensionContext["sessionManager"] | undefined;
   leaf: string | null;
+};
+
+type Messages = ContextWithSystemEvent["messages"];
+
+type DirectoryUpdate = Extract<Messages[number], { role: "system" }>;
+
+/** What the journal says about the directory outside the messages of the current context window. */
+type Carried = {
+  /** The directory sections of the leading system message. They never change within a journal. */
+  leading: Record<string, string | null>;
+  /** The last directory update that a compaction removed from the window, if there is one. */
+  update: DirectoryUpdate | undefined;
 };
 
 export type CwdRecord = {
@@ -36,14 +52,29 @@ function cwdSection(cwd: string): string {
   return `<cwd>\n${cwd}\n</cwd>`;
 }
 
-function sections(state: Snapshot): Record<string, string | null> {
+/** The system message that tells the model the directory and notice of a snapshot. */
+function directoryUpdate(state: Snapshot, timestamp: number): DirectoryUpdate {
   return {
-    cwd: cwdSection(state.cwd),
-    "change-working-dir":
-      state.notice !== undefined
-        ? `<change-working-dir>\n${state.notice}\n</change-working-dir>`
-        : null,
+    role: "system",
+    content: "",
+    sections: {
+      cwd: cwdSection(state.cwd),
+      "change-working-dir":
+        state.notice !== undefined
+          ? `<change-working-dir>\n${state.notice}\n</change-working-dir>`
+          : null,
+    },
+    timestamp,
   };
+}
+
+/** The directory update of a context message, when the message is a saved snapshot. */
+function updateOf(message: Messages[number]): DirectoryUpdate | undefined {
+  if (message.role !== "custom" || message.customType !== CONTEXT_TYPE) {
+    return;
+  }
+  const state = snapshot(message.details);
+  return state === undefined ? undefined : directoryUpdate(state, message.timestamp);
 }
 
 /** Whether the ancestry from the leaf still reaches the last projected entry. */
@@ -80,29 +111,61 @@ function startSection(branch: Branch, sessionCwd: string): string {
   return cwdSection(sessionCwd);
 }
 
-/** The last context snapshot saved before the entry `cutoff`; the whole branch when no entry was kept. */
-function snapshotBefore(branch: Branch, cutoff: string | null): Snapshot | undefined {
-  let earlier: Snapshot | undefined;
+/** The update of the last snapshot saved before the entry `cutoff`; of the whole branch when no entry was kept. */
+function updateBefore(branch: Branch, cutoff: string | null): DirectoryUpdate | undefined {
+  let earlier: DirectoryUpdate | undefined;
   for (const entry of branch) {
     if (entry.id === cutoff) {
       break;
     }
     if (entry.type === "custom_message" && entry.customType === CONTEXT_TYPE) {
-      earlier = snapshot(entry.details) ?? earlier;
+      const state = snapshot(entry.details);
+      earlier = state === undefined ? earlier : directoryUpdate(state, Date.parse(entry.timestamp));
     }
   }
   return earlier;
 }
 
-/** The sections to project into the leading system message: the directory before its window. */
-function baselineFrom(ctx: ExtensionContext): Record<string, string | null> {
+/**
+ * The directory state that the messages of the current window do not hold. The leading system
+ * message always states the directory the journal started with, so a compaction leaves the start
+ * of the request as the provider cached it. The directory in effect before the window follows as
+ * its own update.
+ */
+function carriedFrom(ctx: ExtensionContext): Carried {
   const branch = ctx.sessionManager.getBranch();
   const first = ctx.sessionManager.buildSessionProjection().entries[0]?.sourceEntry;
-  const earlier =
-    first?.type === "compaction" ? snapshotBefore(branch, first.firstKeptEntryId) : undefined;
-  return earlier === undefined
-    ? { cwd: startSection(branch, ctx.cwd), "change-working-dir": null }
-    : sections(earlier);
+  return {
+    leading: { cwd: startSection(branch, ctx.cwd), "change-working-dir": null },
+    update: first?.type === "compaction" ? updateBefore(branch, first.firstKeptEntryId) : undefined,
+  };
+}
+
+/**
+ * Present the saved snapshots as system messages. A snapshot inside the conversation stays in its
+ * place. The updates from before the conversation, carried over a compaction or saved before the
+ * first prompt, go directly after the leading system messages: behind the prompt and the tool
+ * changes a compaction keeps there, and in front of everything that changes with the window.
+ */
+function present(messages: Messages, carried: Carried): Messages {
+  const conversation = messages.findIndex(
+    (message) => message.role !== "system" && updateOf(message) === undefined,
+  );
+  const head = messages.slice(0, conversation === -1 ? messages.length : conversation);
+  const [first, ...others] = head.filter((message) => message.role === "system");
+  const later = [
+    ...head.filter((message) => message.role !== "system"),
+    ...messages.slice(head.length),
+  ].map((message) => updateOf(message) ?? message);
+  if (first === undefined) {
+    return later;
+  }
+  return [
+    { ...first, sections: { ...first.sections, ...carried.leading } },
+    ...others,
+    ...(carried.update === undefined ? [] : [carried.update]),
+    ...later,
+  ];
 }
 
 /** The most recent context snapshot in the branch, if any. */
@@ -138,7 +201,7 @@ export function registerCwdContext(
   currentCwd: (ctx: ExtensionContext) => string,
 ): (ctx: ExtensionContext, cwd: string, record?: CwdRecord) => void {
   let lineage: Lineage = { manager: undefined, leaf: null };
-  let baseline: Record<string, string | null> = {};
+  let carried: Carried = { leading: {}, update: undefined };
 
   pi.on("before_agent_start", (event, ctx) => {
     // oxlint-disable-next-line no-param-reassign -- QX-001: the host documents systemPromptOptions as mutable during this event.
@@ -153,28 +216,10 @@ export function registerCwdContext(
     // Inspect only new ancestry. Rebuild on compaction, branch changes, or restore,
     // never scan the entire journal on every provider request.
     if (lineageChanged(ctx, lineage, nextLeaf)) {
-      baseline = baselineFrom(ctx);
+      carried = carriedFrom(ctx);
     }
     lineage = { manager: ctx.sessionManager, leaf: nextLeaf };
-    return {
-      messages: event.messages.map((message, index) => {
-        if (message.role === "custom" && message.customType === CONTEXT_TYPE) {
-          const state = snapshot(message.details);
-          if (state !== undefined) {
-            return {
-              role: "system" as const,
-              content: "",
-              sections: sections(state),
-              timestamp: message.timestamp,
-            };
-          }
-        }
-        if (index === 0 && message.role === "system") {
-          return { ...message, sections: { ...message.sections, ...baseline } };
-        }
-        return message;
-      }),
-    };
+    return { messages: present(event.messages, carried) };
   });
 
   return (ctx, cwd, record) => {

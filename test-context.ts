@@ -77,6 +77,9 @@ let active = cwd,
   restoreStats = 0,
   beforeStarts = 0;
 let compactFrom: string | undefined;
+/** Stands for a system message that the host or another extension keeps directly after the leading one. */
+const leadingNote: Message = { role: "system", content: "Another leading note.", timestamp: 0 };
+let withLeadingNote = false;
 const manager = SessionManager.inMemory(cwd);
 const getBranch = manager.getBranch.bind(manager);
 manager.getBranch = (...args) => {
@@ -112,6 +115,17 @@ const nativeSystems = () =>
     .filter((entry) => entry.type === "message" && entry.message.role === "system");
 const cwdOf = (prompt: Message[]) =>
   getCurrentSystemPrompt(prompt).match(/<cwd>\n([\s\S]*?)\n<\/cwd>/)?.[1];
+/** What a provider receives first: the prompt and the tool list of the leading system message alone. */
+const leading = (prompt: Message[]) => {
+  const first = item(prompt, 0);
+  return { prompt: getCurrentSystemPrompt([first]), tools: getCurrentTools([first]) };
+};
+/** The directory that each system message of a request states, in request order. */
+const cwdTrail = (prompt: Message[]) =>
+  prompt
+    .filter((message) => message.role === "system")
+    .map((message) => cwdOf([message]))
+    .filter((directory) => directory !== undefined);
 const current = () => item(requests, requests.length - 1);
 /** Checked index access: the surrounding assertions establish the element exists. */
 function item<T>(list: T[], index: number): T {
@@ -133,15 +147,19 @@ const factory: ExtensionFactory = (pi) => {
   let originalMessages: unknown, originalCopy: unknown;
   pi.on("context_with_system", (event) => {
     presenting = true;
-    originalMessages = event.messages;
-    originalCopy = structuredClone(event.messages);
-    for (const message of event.messages) {
+    const transcript = withLeadingNote
+      ? [item(event.messages, 0), leadingNote, ...event.messages.slice(1)]
+      : event.messages;
+    originalMessages = transcript;
+    originalCopy = structuredClone(transcript);
+    for (const message of transcript) {
       if (message.role === "system" && message.sections) {
         Object.freeze(message.sections);
       }
       Object.freeze(message);
     }
-    Object.freeze(event.messages);
+    Object.freeze(transcript);
+    return { messages: transcript };
   });
   const record = registerCwdContext(pi, () => active);
   pi.on("context_with_system", () => {
@@ -351,7 +369,14 @@ try {
   assert.equal(cwdOf(item(requests, 1)), third);
   prefix(item(requests, 0), item(requests, 1));
   assert.equal(beforeStarts, 1);
-  checks.push("idle /cwd before first prompt; same-loop change; exact prior request prefix");
+  const started = leading(item(requests, 0));
+  assert.ok(
+    started.prompt.includes(unrelatedSection) && started.tools.length > 0,
+    "the request starts with the session's prompt and tools, not with a snapshot saved before the first prompt",
+  );
+  checks.push(
+    "idle /cwd before first prompt follows the leading system message; same-loop change; exact prior request prefix",
+  );
   const treeTarget = manager.getLeafId();
   assert.ok(treeTarget !== null, "the branch has a leaf");
   await session.prompt("continue at C");
@@ -403,6 +428,11 @@ try {
     assert.equal(cwdOf(current()), cwd);
     assert.ok(getCurrentSystemPrompt(current()).includes(fallbackNotice));
     assert.deepEqual(selected(), originalSelected);
+    assert.deepEqual(
+      leading(current()),
+      started,
+      "the fallback directory and its notice are an update; the leading system message stays the session's first",
+    );
   };
   verifyFallback();
   const historicalSnapshots = structuredClone(snapshots());
@@ -440,7 +470,7 @@ try {
   assert.equal(restores, restoredAt);
   assert.equal(restoreStats, statsAt);
   checks.push(
-    "fallback notice and effective A survive compaction/B reappearance without touching selected B or restatting",
+    "fallback notice and effective A survive compaction/B reappearance without touching selected B, the leading system message, or restatting",
   );
 
   session.dispose();
@@ -472,7 +502,7 @@ try {
   prefix(prior);
   checks.push("native tree navigation restores branch-specific provenance and stable continuation");
 
-  // Retain the change itself: the new head must use the state BEFORE that snapshot.
+  // Retain the change itself: the state BEFORE that snapshot follows the leading system message.
   await session.prompt(`/cwd ${next}`);
   const retainFrom = snapshots().at(-1);
   assert.ok(retainFrom, "the B transition snapshot exists");
@@ -481,12 +511,21 @@ try {
   await session.compact();
   await session.prompt("after retaining the B transition");
   assert.equal(cwdOf(current()), next);
-  assert.equal(cwdOf([item(current(), 0)]), third);
+  assert.deepEqual(
+    leading(current()),
+    started,
+    "a compaction after directory changes keeps the leading system message",
+  );
+  assert.deepEqual(
+    cwdTrail(current()).slice(0, 3),
+    [next, third, next],
+    "the directory from before the kept entries follows the leading system message, then the kept change replays",
+  );
   prior = current();
   await session.prompt("retained transition continuation");
   prefix(prior);
   checks.push(
-    "retained-boundary baseline uses the prior effective directory, then replays the retained change",
+    "retained boundary: the leading system message is unchanged, the prior effective directory follows it, then the retained change replays",
   );
   session.dispose();
   manager.newSession();
@@ -527,9 +566,48 @@ try {
   compactFrom = undefined;
   await session.compact();
   await session.prompt("forked child after its own compaction");
-  assert.equal(cwdOf([item(current(), 0)]), third);
+  assert.equal(cwdOf(current()), third);
+  assert.deepEqual(
+    leading(current()),
+    leading(parentRequest),
+    "a forked child keeps the parent's leading system message across its own compaction",
+  );
   checks.push(
-    "a forked child in another directory keeps the parent's leading prompt, then records and keeps its own directory",
+    "a forked child in another directory keeps the parent's leading prompt, also across its own compaction, then records and keeps its own directory",
+  );
+
+  session.dispose();
+  manager.newSession();
+  session = await makeSession();
+  await session.prompt("before any directory change");
+  const unchanged = leading(current());
+  withLeadingNote = true;
+  for (const directory of [next, third, cwd, literal]) {
+    await session.prompt(`/cwd ${directory}`);
+    await session.prompt("work in the selected directory");
+    await session.compact();
+    await session.prompt("first request after the compaction");
+    assert.equal(cwdOf(current()), directory);
+    assert.deepEqual(
+      leading(current()),
+      unchanged,
+      "every compaction after a directory change keeps the leading system message",
+    );
+    const conversation = current().findIndex((message) => message.role !== "system");
+    assert.deepEqual(
+      current()
+        .slice(1, conversation)
+        .map((message) => cwdOf([message])),
+      [undefined, directory],
+      "one update with the directory from before the window stands after the other leading system messages",
+    );
+    prior = current();
+    await session.prompt("continue after the compaction");
+    prefix(prior);
+  }
+  withLeadingNote = false;
+  checks.push(
+    "repeated directory changes and compactions keep the leading system message; one update follows the leading system messages and keeps its place",
   );
 
   session.dispose();
