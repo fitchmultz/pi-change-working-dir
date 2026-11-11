@@ -179,7 +179,7 @@ export function createSelection(
       ctx.ui.notify(saved.notice, "warning");
     }
     updateStatus(ctx);
-    record(ctx, current(ctx), { notice: saved.notice });
+    record(ctx, current(ctx), { kind: "restore", notice: saved.notice });
   };
 
   const change = (path: unknown, ctx: ExtensionContext, clear = false): string => {
@@ -196,7 +196,7 @@ export function createSelection(
         pi.appendEntry(ENTRY_TYPE, { dir: state.directory });
       } finally {
         updateStatus(ctx);
-        record(ctx, current(ctx), { changed: true });
+        record(ctx, current(ctx), { kind: "change" });
       }
     }
     return current(ctx);

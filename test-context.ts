@@ -215,14 +215,17 @@ const factory: ExtensionFactory = (pi) => {
         /* Missing fixture directory. */
       }
     }
-    record(ctx, active, { notice: saved && active !== saved.cwd ? fallbackNotice : undefined });
+    record(ctx, active, {
+      kind: "restore",
+      notice: saved && active !== saved.cwd ? fallbackNotice : undefined,
+    });
   };
   pi.on("session_start", (_event, ctx) => restore(ctx));
   pi.on("session_tree", (_event, ctx) => restore(ctx));
   const change = (ctx: ExtensionContext, path: string) => {
     active = path;
     pi.appendEntry(selectedType, { cwd: path });
-    record(ctx, active, { changed: true });
+    record(ctx, active, { kind: "change" });
   };
   pi.registerCommand("cwd", {
     description: "Select a fixture directory",
@@ -230,7 +233,7 @@ const factory: ExtensionFactory = (pi) => {
   });
   pi.registerCommand("record-again", {
     description: "Check unchanged snapshot deduplication",
-    handler: async (_args, ctx) => record(ctx, active),
+    handler: async (_args, ctx) => record(ctx, active, { kind: "restore" }),
   });
   pi.registerTool({
     name: "change_dir",

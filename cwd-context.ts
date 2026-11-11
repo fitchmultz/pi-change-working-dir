@@ -28,10 +28,8 @@ type PrefixCache = {
   sections: Carried;
 };
 
-export type CwdRecord = {
-  notice?: string | undefined;
-  changed?: boolean;
-};
+/** Why a snapshot is recorded: a change is always new, a restore may repeat the journal. */
+export type CwdRecord = { kind: "change" } | { kind: "restore"; notice?: string | undefined };
 
 /** The saved context snapshot of a journal entry, when it carries a valid one. */
 function snapshot(details: unknown): Snapshot | undefined {
@@ -240,7 +238,7 @@ function shouldSuppress(
 export function registerCwdContext(
   pi: ExtensionAPI,
   currentCwd: (ctx: ExtensionContext) => string,
-): (ctx: ExtensionContext, cwd: string, record?: CwdRecord) => void {
+): (ctx: ExtensionContext, cwd: string, record: CwdRecord) => void {
   let prefix: PrefixCache | undefined;
 
   pi.on("before_agent_start", (event, ctx) => {
@@ -257,9 +255,8 @@ export function registerCwdContext(
   });
 
   return (ctx, cwd, record) => {
-    // Validated changes may still be queued; only restores can deduplicate against branch history.
-    const notice = record?.notice;
-    if (record?.changed !== true) {
+    const notice = record.kind === "restore" ? record.notice : undefined;
+    if (record.kind === "restore") {
       const branch = ctx.sessionManager.getBranch();
       if (shouldSuppress(latestSnapshot(branch), cwd, notice, startSection(branch, ctx.cwd))) {
         return;
