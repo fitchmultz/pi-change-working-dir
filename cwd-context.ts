@@ -142,6 +142,14 @@ function carriedFrom(ctx: ExtensionContext): Carried {
 }
 
 /**
+ * Whether the host started the context with a provider summary block. The field is read from a
+ * plain object, because only hosts that offer the block declare it.
+ */
+function startsWithSummaryBlock(first: object): boolean {
+  return "providerSummary" in first && first.providerSummary !== undefined;
+}
+
+/**
  * Present the saved snapshots as system messages. A snapshot inside the conversation stays in its
  * place. The updates from before the conversation, carried over a compaction or saved before the
  * first prompt, go directly after the leading system messages: behind the prompt and the tool
@@ -169,7 +177,7 @@ function present(messages: Messages, carried: Carried): Messages {
   if (carried.update === undefined) {
     return [lead, ...others, ...later];
   }
-  if (!("providerSummary" in first) || first.providerSummary === undefined) {
+  if (!startsWithSummaryBlock(first)) {
     return [lead, ...others, carried.update, ...later];
   }
   const kept = later.slice(
