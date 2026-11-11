@@ -80,6 +80,37 @@ let compactFrom: string | undefined;
 /** Stands for a system message that the host or another extension keeps directly after the leading one. */
 const leadingNote: Message = { role: "system", content: "Another leading note.", timestamp: 0 };
 let withLeadingNote = false;
+/** The number of kept messages of the compaction that `asSummaryBlockContext` presents with a block. */
+let summaryBlockKept: number | undefined;
+/**
+ * The context of a host that starts a compacted window with a provider summary block: the block on
+ * the leading system message, the `kept` messages, the compaction summary, then the later messages.
+ * The host under test puts the summary in front of the kept messages.
+ */
+function asSummaryBlockContext<T extends { role: string }>(context: T[], kept: number): T[] {
+  const summary = context.findIndex((message) => message.role === "compactionSummary");
+  if (summary === -1) {
+    return context;
+  }
+  const lead = {
+    ...item(context, 0),
+    providerSummary: {
+      provider: "anthropic",
+      api: "anthropic-messages",
+      model: "claude",
+      block: { type: "compaction", content: "Earlier work.", signature: "sig" },
+      timestamp: 0,
+    },
+  };
+  const afterSummary = summary + 1;
+  return [
+    lead,
+    ...context.slice(1, summary),
+    ...context.slice(afterSummary, afterSummary + kept),
+    item(context, summary),
+    ...context.slice(afterSummary + kept),
+  ];
+}
 const manager = SessionManager.inMemory(cwd);
 const getBranch = manager.getBranch.bind(manager);
 manager.getBranch = (...args) => {
@@ -147,9 +178,13 @@ const factory: ExtensionFactory = (pi) => {
   let originalMessages: unknown, originalCopy: unknown;
   pi.on("context_with_system", (event) => {
     presenting = true;
+    const hostMessages =
+      summaryBlockKept === undefined
+        ? event.messages
+        : asSummaryBlockContext(event.messages, summaryBlockKept);
     const transcript = withLeadingNote
-      ? [item(event.messages, 0), leadingNote, ...event.messages.slice(1)]
-      : event.messages;
+      ? [item(hostMessages, 0), leadingNote, ...hostMessages.slice(1)]
+      : hostMessages;
     originalMessages = transcript;
     originalCopy = structuredClone(transcript);
     for (const message of transcript) {
@@ -608,6 +643,47 @@ try {
   withLeadingNote = false;
   checks.push(
     "repeated directory changes and compactions keep the leading system message; one update follows the leading system messages and keeps its place",
+  );
+
+  // The provider keeps the reasoning of the kept messages only while they follow the block directly.
+  session.dispose();
+  manager.newSession();
+  session = await makeSession();
+  await session.prompt("before any directory change");
+  await session.prompt(`/cwd ${next}`);
+  await session.prompt("work that the block summarizes");
+  await session.prompt("work that the compaction keeps");
+  const keptFrom = manager
+    .getBranch()
+    .findLast((entry) => entry.type === "message" && entry.message.role === "user");
+  assert.ok(keptFrom, "the kept prompt exists");
+  compactFrom = keptFrom.id;
+  summaryBlockKept = 2;
+  await session.compact();
+  await session.prompt("first request after the summary block");
+  const afterBlock = current();
+  const firstKept = afterBlock.findIndex((message) => message.role !== "system");
+  assert.deepEqual(
+    cwdTrail(afterBlock.slice(0, firstKept)),
+    [cwd],
+    "no directory update stands between the summary block and the kept messages",
+  );
+  const summaryAt = afterBlock.findIndex((message) =>
+    JSON.stringify(message).includes("Earlier work summarized."),
+  );
+  assert.ok(summaryAt > firstKept, "the summary follows the kept messages");
+  assert.equal(
+    cwdOf([item(afterBlock, summaryAt + 1)]),
+    next,
+    "the update with the directory from before the window stands directly after the summary",
+  );
+  assert.equal(cwdOf(afterBlock), next);
+  await session.prompt("continue after the summary block");
+  prefix(afterBlock);
+  compactFrom = undefined;
+  summaryBlockKept = undefined;
+  checks.push(
+    "after a compaction with a provider summary block the kept messages follow the block; the directory update follows the summary and keeps its place",
   );
 
   session.dispose();
