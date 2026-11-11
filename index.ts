@@ -208,14 +208,12 @@ function registerLifecycle(
   gate: FailureGate,
 ): void {
   pi.on("session_start", (_event, ctx) => {
-    const initialized = selection.context()?.sessionManager === ctx.sessionManager;
-    selection.initialize(ctx);
-    if (initialized) {
+    if (selection.attach(ctx)) {
       selection.restore(ctx);
     }
   });
   pi.on("session_tree", (_event, ctx) => {
-    selection.initialize(ctx);
+    selection.attach(ctx);
     selection.restore(ctx);
   });
   pi.on("turn_start", () => {
@@ -264,7 +262,7 @@ function registerChannels(pi: ExtensionAPI, selection: ReturnType<typeof createS
 function registerAdmission(deps: AdmissionDeps): void {
   const { pi, selection, binder, ownedTools, gate, shell } = deps;
   pi.on("user_bash", (_event, ctx) => {
-    selection.initialize(ctx);
+    selection.attach(ctx);
     const cwd = selection.current(ctx);
     if (cwd === ctx.cwd) {
       return;
@@ -286,7 +284,7 @@ function registerAdmission(deps: AdmissionDeps): void {
     if ("namespace" in event && event.namespace !== undefined) {
       return;
     }
-    selection.initialize(ctx);
+    selection.attach(ctx);
     const owner = ownedTools.get(event.toolName);
     const installed = pi.getAllTools().find((tool) => tool.name === event.toolName);
     if (owner !== undefined && installed?.sourceInfo.path === owner) {
@@ -336,7 +334,7 @@ function registerCwdCommand(pi: ExtensionAPI, selection: ReturnType<typeof creat
   pi.registerCommand("cwd", {
     description: "Show or change the working directory: /cwd [path|-]",
     async handler(args, ctx) {
-      selection.initialize(ctx);
+      selection.attach(ctx);
       const path = args.trim();
       if (path === "") {
         const suffix =
