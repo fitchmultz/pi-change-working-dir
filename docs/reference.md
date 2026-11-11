@@ -86,4 +86,14 @@ Pi has no checkpoint, Bash-cwd-hook, or file-publisher exports. Branch recovery 
 
 ## Model behavior
 
-`change_dir` is an ordinary strict-schema, sequential tool. It does not require Astra-only APIs, asynchronous tool jobs, or tool discovery. Structured context updates become native system deltas without mutating the journal. Baseline restoration inspects only newly appended ancestry on ordinary requests; full branch reconstruction occurs after compaction, branch changes, or restore. The directory in the leading system message comes from the journal: the last saved directory update before the current context window, or the directory the first system message recorded. A session started from a copy of another journal in a different directory, such as a context-forked child, therefore sends the original's leading system message unchanged and saves its own directory as a later update. Legacy saved presentation snapshots remain readable. Structured updates preserve prompt prefixes on models/providers supporting mid-conversation system messages. Provider configuration and other extensions' whole-prompt overrides can affect caching; this package does not change them or promise a particular cache hit rate.
+`change_dir` is an ordinary strict-schema, sequential tool. It does not require Astra-only APIs, asynchronous tool jobs, or tool discovery. Structured context updates become native system deltas without mutating the journal.
+
+The leading system message of every request states the directory that the journal's first system message recorded, before and after each compaction and whatever directory changes the session made. A provider can therefore still read the tool list and the prompt from its cache after a compaction. The model learns the selected directory and any notice from directory updates:
+
+- An update saved inside the context window is sent at its place in the conversation.
+- After a compaction, the last update from before the window is sent as one system message directly after the leading system messages: behind the prompt and, on the maintained fork, the tool changes that a compaction keeps there, and ahead of the summary and the kept messages. It keeps that place on every later request of the window.
+- An update saved before the first prompt, for example by `/cwd`, goes to the same place.
+
+A session started from a copy of another journal in a different directory, such as a context-forked child, therefore sends the original's leading system message unchanged and saves its own directory as a later update. On a model or provider without mid-conversation system messages, Pi folds all system messages into one prompt that states the selected directory; that prompt changes with each directory change.
+
+The journal is read for this only after a compaction, a branch change, or a restore; ordinary requests inspect only newly appended ancestry. Legacy saved presentation snapshots remain readable. Provider configuration and other extensions' whole-prompt overrides can affect caching; this package does not change them or promise a particular cache hit rate.
