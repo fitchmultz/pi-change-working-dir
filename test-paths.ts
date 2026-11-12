@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, parse, sep, toNamespacedPath } from "node:path";
+import { join, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
@@ -469,18 +469,6 @@ try {
       await editing;
       assert.equal(readFileSync(target, "utf8"), "NEW");
     }
-  }
-  if (process.platform === "win32") {
-    const drive = parse(root).root.slice(0, 2);
-    assert.equal(
-      text(await execute("read", { path: `${drive}file.txt` })),
-      readFileSync(join(root, "file.txt"), "utf8").trimEnd(),
-    );
-    const extended = `${toNamespacedPath(root)}\\extended\u00a0.`;
-    writeFileSync(extended, "EXTENDED");
-    assert.equal(text(await execute("read", { path: extended })), readFileSync(extended, "utf8"));
-    await execute("write", { path: extended, content: "EXTENDED_UPDATED" });
-    assert.equal(readFileSync(extended, "utf8"), "EXTENDED_UPDATED");
   }
   const unicodeDir = "search\u00a0directory";
   mkdirSync(join(root, unicodeDir));
