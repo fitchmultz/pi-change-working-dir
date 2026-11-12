@@ -14,7 +14,7 @@ depart from the standard's own values are recorded in [quality-exceptions.md](qu
 
 ## Runtimes and package manager
 
-- Node.js 24.15 or later (`package.json` engines); `package.json` pins `npm@12.2.0` as the package
+- Node.js 24.22.3 (24.x) or 26.13.1 and later (`package.json` engines); `package.json` pins `npm@12.2.0` as the package
   manager. Install uses the public npm registry only; `npm run check:lock` rejects a lockfile with
   private-registry URLs.
 - Pi runtime targets: the official `pi-coding-agent` release declared in `devDependencies` and the
