@@ -4,7 +4,7 @@ For installation and everyday use, see the [README](../README.md). The [referenc
 
 ## Local development
 
-Requires Node.js 24.15 or later and Pi 1.5.0 or later. Development dependencies currently use official Pi 1.5.0 and TypeBox 1.3.27; [`package.json`](../package.json) is the source of truth for the exact versions. Distribution is Git/GitHub only, not npm.
+Requires Node.js 24.22.3 (24.x) or 26.13.1 and later and Pi 1.5.0 or later. Development dependencies currently use official Pi 1.5.0 and TypeBox 1.3.27; [`package.json`](../package.json) is the source of truth for the exact versions. Distribution is Git/GitHub only, not npm.
 
 ```sh
 npm ci --ignore-scripts
@@ -32,7 +32,7 @@ PI_PACKAGE_DIR=/absolute/path/to/pi-coding-agent PI_COMPAT_HOST=fork npm test
 
 ## Compatibility coverage
 
-CI qualifies official Pi and current [`fitchmultz/pi`](https://github.com/fitchmultz/pi) `main` on Linux (Node 24.15, the minimum) and macOS (latest Node 24) with the shared `fitchmultz/.github` qualifier: package contracts, a fresh Git install, and the real bundled Pi CLI. Dropped host APIs are not qualification requirements.
+CI qualifies official Pi and current [`fitchmultz/pi`](https://github.com/fitchmultz/pi) `main` on Linux (Node 24.22.3, the minimum) and macOS (latest Node 24) with the shared `fitchmultz/.github` qualifier: package contracts, a fresh Git install, and the real bundled Pi CLI. Dropped host APIs are not qualification requirements.
 
 The Bash fixture loads the real `background_command` extension through the selected SDK's optional factory when available, verifies the detached child's saved output and captured directory across a later selection change, and closes the owned job. Official SDKs without this factory report only that optional path unattempted; this is not a background pass. Background owners must capture the public directory-query result before awaiting spawn.
 

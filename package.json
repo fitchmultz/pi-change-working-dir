@@ -44,7 +44,7 @@
     "prepublishOnly": "npm run check"
   },
   "engines": {
-    "node": ">=24.15.0"
+    "node": ">=24.22.3 <25 || >=26.13.1"
   },
   "packageManager": "npm@12.2.0",
   "pi": {
