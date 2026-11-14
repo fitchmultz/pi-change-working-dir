@@ -5,18 +5,27 @@
  * membership for every maintained source, and enforces the authorized suppression-directive
  * inventory exactly: a directive that is copied, duplicated, unrecorded, or unused fails here.
  */
-import { createHash } from "node:crypto";
+import { hash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { join, posix, relative, resolve, sep } from "node:path";
+import { parseArgs } from "node:util";
 import { parseSync } from "oxc-parser";
 
 import { sourceProfiles } from "./policy-baseline.ts";
 
 const { directiveInventory, ruleAllowances } = sourceProfiles;
 const repo = resolve(import.meta.dirname, "..");
-const cliArgs = process.argv.slice(2);
-const lintConfigPath = cliValue("--lint-config") ?? ".oxlintrc.json";
-const formatConfigPath = cliValue("--format-config") ?? ".oxfmtrc.json";
+const { values: cli } = parseArgs({
+  options: {
+    "lint-config": { type: "string" },
+    "format-config": { type: "string" },
+  },
+  strict: false,
+});
+const lintConfigPath =
+  typeof cli["lint-config"] === "string" ? cli["lint-config"] : ".oxlintrc.json";
+const formatConfigPath =
+  typeof cli["format-config"] === "string" ? cli["format-config"] : ".oxfmtrc.json";
 const guidePath = join(repo, "docs/quality/strict-oxlint-oxfmt-5.1.2.md");
 const problems: string[] = [];
 const report: string[] = [];
@@ -112,14 +121,14 @@ function checkCoverage(): string[] {
   const globs = sourceProfiles.profiles.flatMap((profile) => profile.globs);
   const maintained: string[] = [];
   for (const file of walk(".")) {
-    if (!globs.some((glob) => matches(glob, file))) {
+    if (!globs.some((glob) => posix.matchesGlob(file, glob))) {
       problems.push(
         `${file} is a maintained source with no profile; classify it in policy-baseline.ts`,
       );
       continue;
     }
     maintained.push(file);
-    if (!include.some((entry) => matches(entry, file))) {
+    if (!include.some((entry) => posix.matchesGlob(file, entry))) {
       problems.push(`${file} has no compiler project owner`);
     }
   }
@@ -186,12 +195,6 @@ function checkDirectiveComment(
   return 1;
 }
 
-/** Optional override so the qualification harness can verify drift detection against a mutated copy. */
-function cliValue(flag: string): string | undefined {
-  const index = cliArgs.indexOf(flag);
-  return index === -1 ? undefined : cliArgs[index + 1];
-}
-
 function jsonBlocks(markdown: string): unknown[] {
   const found: unknown[] = [];
   for (const match of markdown.matchAll(/```json\n([\s\S]*?)```/g)) {
@@ -214,7 +217,7 @@ function isFormatBlock(value: unknown): value is Record<string, unknown> {
 }
 
 function digest(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+  return hash("sha256", JSON.stringify(value), "hex").slice(0, 16);
 }
 
 function same(a: unknown, b: unknown): boolean {
@@ -262,13 +265,4 @@ function walk(dir: string): string[] {
     }
   }
   return found;
-}
-
-function matches(glob: string, file: string): boolean {
-  const pattern = glob
-    .replace(/\*\*\//g, "GLOBSTAR/")
-    .replace(/\*/g, "[^/]*")
-    .replace(/\?/g, ".")
-    .replace(/GLOBSTAR\//g, "(?:[^/]+/)*");
-  return new RegExp(`^${pattern}$`).test(file);
 }
