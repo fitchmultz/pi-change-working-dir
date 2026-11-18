@@ -14,8 +14,9 @@ import {
   type ExtensionContext,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { replaceControlCharacters } from "@earendil-works/pi-tui";
 import { Type, type TSchema } from "typebox";
-import { assertAvailable, escapeControl, isRecord } from "./native-paths.ts";
+import { assertAvailable, isRecord } from "./native-paths.ts";
 import { createSelection } from "./selection.ts";
 import { createToolBinder, type ToolBinder, type WrappedDetails } from "./tool-wrapper.ts";
 
@@ -324,34 +325,47 @@ function registerChangeDir(pi: ExtensionAPI, selection: ReturnType<typeof create
     async execute(_id, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
       const cwd = selection.change(params.path, ctx);
-      return { content: [{ type: "text", text: `Working directory: ${cwd}` }], details: { cwd } };
+      return {
+        content: [{ type: "text", text: `Working directory: ${replaceControlCharacters(cwd)}` }],
+        details: { cwd },
+      };
     },
   });
+}
+
+/** Deliver command feedback through Pi's UI when active, or stderr on failure in headless runs. */
+function notifyCommand(ctx: ExtensionContext, message: string, level: "info" | "error"): void {
+  const safe = replaceControlCharacters(message);
+  if (ctx.hasUI) {
+    ctx.ui.notify(safe, level);
+  } else if (level === "error") {
+    console.error(safe);
+  }
 }
 
 /** The /cwd command: show the current selection or switch and reset it. */
 function registerCwdCommand(pi: ExtensionAPI, selection: ReturnType<typeof createSelection>): void {
   pi.registerCommand("cwd", {
-    description: "Show or change the working directory: /cwd [path|-]",
+    description: "Show or change the working directory (pass a path, or - to reset)",
     async handler(args, ctx) {
       selection.attach(ctx);
       const path = args.trim();
       if (path === "") {
+        const current = selection.current(ctx);
         const suffix =
-          selection.current(ctx) === ctx.cwd ? "" : ` (session: ${escapeControl(ctx.cwd)})`;
-        ctx.ui.notify(
-          `Working directory: ${escapeControl(selection.current(ctx))}${suffix}`,
+          current === ctx.cwd ? "" : ` (session: ${replaceControlCharacters(ctx.cwd)})`;
+        notifyCommand(
+          ctx,
+          `Working directory: ${replaceControlCharacters(current)}${suffix}`,
           "info",
         );
         return;
       }
       try {
-        ctx.ui.notify(
-          `Working directory: ${selection.change(path === "-" ? ctx.cwd : path, ctx, path === "-")}`,
-          "info",
-        );
+        const selected = selection.change(path === "-" ? ctx.cwd : path, ctx, path === "-");
+        notifyCommand(ctx, `Working directory: ${replaceControlCharacters(selected)}`, "info");
       } catch (error) {
-        ctx.ui.notify(errorMessage(error), "error");
+        notifyCommand(ctx, errorMessage(error), "error");
       }
     },
   });

@@ -17,9 +17,7 @@ depart from the standard's own values are recorded in [quality-exceptions.md](qu
 - Node.js 24.22.3 (24.x) or 26.13.1 and later (`package.json` engines); `package.json` pins `npm@12.2.0` as the package
   manager. Install uses the public npm registry only; `npm run check:lock` rejects a lockfile with
   private-registry URLs.
-- Pi runtime targets: the official `pi-coding-agent` release declared in `devDependencies` and the
-  fork release this repository is developed against; qualification swaps the installed host through
-  `PI_PACKAGE_DIR` without changing the pinned declarations.
+- Pi runtime targets: official Pi 1.5.2+ (locked in `devDependencies`; shared CI qualifies the latest official Pi release) and the maintained fork release; local qualification swaps the installed host through `PI_PACKAGE_DIR` without changing the pinned declarations.
 
 ## Installed tool versions
 
@@ -54,16 +52,18 @@ depart from the standard's own values are recorded in [quality-exceptions.md](qu
   standard's required compiler options enabled. `skipLibCheck` stays enabled: the repository ships
   no handwritten declarations, so there is no declaration closure to check.
 - No maintained JavaScript exists, so `allowJs`/`checkJs` are not required.
-- Source profiles follow the standard: production sources are `index.ts`, `cwd-context.ts`, and
-  `scripts/**`; test sources are the `test*.ts` family. `scripts/policy-baseline.ts` records the
-  inventory; a maintained file matching no profile fails `policy:check` until it is classified.
+- Source profiles follow the standard: production sources are `index.ts`, `cwd-context.ts`,
+  `native-paths.ts`, `selection.ts`, `tool-wrapper.ts`, `mutation-delegate.ts`, and `scripts/**`;
+  test sources are the `test*.ts` family. `scripts/policy-baseline.ts` records the inventory; a
+  maintained file matching no profile fails `policy:check` until it is classified.
 
 ## Formatter and generator ownership
 
 - oxfmt owns every supported file in the repository; no other formatter is configured. Formatting
   is expected to be idempotent, and `format:check` proves it.
-- No code generators produce maintained sources. Qualification-control fixtures are runtime scratch
-  space created and removed by `test-quality.ts`.
+- No code generators produce maintained sources. `test-quality.ts` verifies `scripts/check-policy.ts`
+  against isolated temporary directories (`--root`) and runs `scripts/run-gates.ts` read-only on
+  the repository without mutating tracked files.
 
 ## Migration status
 

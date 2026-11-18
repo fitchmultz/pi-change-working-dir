@@ -31,7 +31,7 @@
   "scripts": {
     "test": "node --test --test-concurrency=1 \"test*.ts\"",
     "typecheck": "tsc",
-    "lint": "oxlint --deny-warnings --ignore-pattern 'probes/**' .",
+    "lint": "oxlint --deny-warnings .",
     "lint:agent": "oxlint --deny-warnings --format=agent .",
     "lint:fix": "oxlint --fix .",
     "format": "oxfmt --write .",
@@ -54,10 +54,14 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
       "optional": true
     },
     "typebox": {
@@ -68,6 +72,7 @@
     "@earendil-works/pi-agent-core": "1.5.2",
     "@earendil-works/pi-ai": "1.5.2",
     "@earendil-works/pi-coding-agent": "1.5.2",
+    "@earendil-works/pi-tui": "1.5.2",
     "@types/node": "24.19.1",
     "oxc-parser": "0.156.0",
     "oxfmt": "0.75.0",

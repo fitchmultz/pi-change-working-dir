@@ -1,5 +1,6 @@
 import { isAbsolute } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { replaceControlCharacters } from "@earendil-works/pi-tui";
 import { registerCwdContext } from "./cwd-context.ts";
 import { accessibleDirectory, escapeControl, operationPath, tildify } from "./native-paths.ts";
 
@@ -163,7 +164,9 @@ export function createSelection(
     if (ctx.hasUI) {
       ctx.ui.setStatus(
         "cwd",
-        state.directory === undefined ? undefined : `cwd: ${tildify(state.directory)}`,
+        state.directory === undefined
+          ? undefined
+          : `cwd: ${replaceControlCharacters(tildify(state.directory))}`,
       );
     }
   };
@@ -176,7 +179,7 @@ export function createSelection(
     const saved = restoreFromEntry(ctx);
     state = adoptRestored(state, saved);
     if (saved.notice !== undefined && ctx.hasUI) {
-      ctx.ui.notify(saved.notice, "warning");
+      ctx.ui.notify(replaceControlCharacters(saved.notice), "warning");
     }
     updateStatus(ctx);
     record(ctx, current(ctx), { kind: "restore", notice: saved.notice });

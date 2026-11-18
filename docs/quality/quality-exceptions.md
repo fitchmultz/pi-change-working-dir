@@ -271,10 +271,9 @@ Structural comparison or unsafe-type evidence, where applicable:
   names in use (see lost detection below).
 
 Verification commands, relevant tests, and results:
-  The qualification controls in test-quality.ts cover the floating-promise protection with a real
-  violation (async-floating.ts reports exactly one diagnostic) and valid counterparts
-  (async-owned.ts, async-unknown-forward.ts report zero). test-quality.ts itself registers
-  through the mapped names and passes the checker.
+  npm run policy:check verifies .oxlintrc.json matches the recorded allowance and directive
+  inventory; npm run lint checks every test*.ts file (including test-quality.ts) through the
+  mapped names under the test-profile override.
 
 Retained protection, lost detection, and established assumptions:
   Retained: all other floating-promise options (ignoreVoid false, ignoreIIFE false,
@@ -286,8 +285,7 @@ Retained protection, lost detection, and established assumptions:
 
 Review and revisit trigger:
   Any upgrade of oxlint or oxlint-tsgolint, any new registration form, or the first use of a
-  shorthand modifier through a mapped name. Re-measure with the qualification controls and update
-  this record.
+  shorthand modifier through a mapped name. Re-qualify against npm run lint and update this record.
 ```
 
 No other exceptions exist. Structural thresholds, formatter settings, and the baseline rule set are

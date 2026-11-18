@@ -151,6 +151,13 @@ try {
     type: "json_schema",
     strict: "prefer",
   });
+  assert.partialDeepStrictEqual(changeDir.parameters, { additionalProperties: false });
+  const cwdCommand = session.extensionRunner.getCommand("cwd");
+  assert.ok(cwdCommand, "/cwd command is registered");
+  assert.ok(
+    cwdCommand.description !== undefined && !cwdCommand.description.includes("/cwd"),
+    "command description omits redundant /cwd syntax",
+  );
   assert.equal(query(api, session)?.cwd, origin);
   const readDef = session.getToolDefinition("read");
   assert.ok(readDef);
@@ -472,6 +479,119 @@ try {
   await bare.session.prompt(`/cwd ${target}`);
   assert.equal(query(bare.api, bare.session)?.cwd, target);
   assert.match(text(await execute(bare.session, "read", { path: "same.txt" })), /TARGET/);
+
+  // Headless /cwd never invokes ctx.ui and routes error notices to stderr cleanly.
+  const baseCmdCtx = bare.session.extensionRunner.createCommandContext();
+  const headlessErrors: unknown[] = [];
+  const origConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    headlessErrors.push(args.map(String).join(" "));
+  };
+  try {
+    const headlessCtx = {
+      ...baseCmdCtx,
+      hasUI: false,
+      ui: {
+        ...bare.session.extensionRunner.getUIContext(),
+        notify() {
+          assert.fail("ctx.ui.notify must not be called when ctx.hasUI is false");
+        },
+        setStatus() {
+          assert.fail("ctx.ui.setStatus must not be called when ctx.hasUI is false");
+        },
+      },
+    };
+    const bareCwdCommand = bare.session.extensionRunner.getCommand("cwd");
+    assert.ok(bareCwdCommand);
+    await bareCwdCommand.handler("", headlessCtx);
+    await bareCwdCommand.handler(other, headlessCtx);
+    await bareCwdCommand.handler(join(root, "missing\nctl"), headlessCtx);
+    await bareCwdCommand.handler("-", headlessCtx);
+    assert.equal(headlessErrors.length, 1);
+    assert.doesNotMatch(String(headlessErrors[0]), /[\u0000-\u001f\u007f-\u009f]/);
+  } finally {
+    console.error = origConsoleError;
+  }
+
+  // UI mode emits /cwd notices and status updates sanitized with replaceControlCharacters.
+  const uiOrigin = join(root, "ui-origin");
+  const vanished = join(root, "ui-vanished");
+  mkdirSync(uiOrigin);
+  mkdirSync(vanished);
+  const notices: Array<{ message: string; type: string | undefined }> = [];
+  const statuses: Array<{ key: string; text: string | undefined }> = [];
+  const uiRun = await setup({ cwd: uiOrigin, bind: false });
+  await uiRun.session.bindExtensions({
+    mode: "tui",
+    uiContext: {
+      ...uiRun.session.extensionRunner.getUIContext(),
+      notify(message, type) {
+        notices.push({ message, type });
+      },
+      setStatus(key, statusText) {
+        statuses.push({ key, text: statusText });
+      },
+    },
+    onError: (error) => assert.fail(error.error),
+  });
+  await uiRun.session.prompt("/cwd");
+  await uiRun.session.prompt(`/cwd ${target}`);
+  await uiRun.session.prompt("/cwd");
+  await uiRun.session.prompt(`/cwd ${join(root, "missing\u001b[31m\npath")}`);
+  await uiRun.session.prompt("/cwd -");
+  assert.equal(notices.length, 5);
+  assert.deepEqual(
+    notices.map((notice) => notice.type),
+    ["info", "info", "info", "error", "info"],
+  );
+  for (const notice of notices) {
+    assert.doesNotMatch(notice.message, /[\u0000-\u001f\u007f-\u009f]/);
+  }
+  assert.match(notices[2]?.message ?? "", /\(session:/);
+  assert.ok(
+    statuses.some(
+      (status) =>
+        status.key === "cwd" && status.text !== undefined && status.text.startsWith("cwd: "),
+    ),
+    "UI mode updates the footer cwd status",
+  );
+  assert.equal(statuses.at(-1)?.text, undefined, "resetting via /cwd - clears the cwd status");
+
+  // Unavailable saved selections emit sanitized warning notices when UI is active.
+  await uiRun.session.prompt(`/cwd ${vanished}`);
+  rmSync(vanished, { recursive: true });
+  await uiRun.session.reload();
+  const restoreWarning = notices.at(-1);
+  assert.ok(restoreWarning, "reload emits a fallback warning notice");
+  assert.equal(restoreWarning.type, "warning");
+  assert.match(restoreWarning.message, /Saved working directory unavailable/);
+  assert.doesNotMatch(restoreWarning.message, /[\u0000-\u001f\u007f-\u009f]/);
+
+  if (process.platform !== "win32") {
+    const ctlOrigin = join(root, "origin\u001b[31m-ctl");
+    mkdirSync(ctlOrigin);
+    const ctlNotices: Array<{ message: string; type: string | undefined }> = [];
+    const ctlRun = await setup({ cwd: ctlOrigin, bind: false });
+    await ctlRun.session.bindExtensions({
+      mode: "tui",
+      uiContext: {
+        ...ctlRun.session.extensionRunner.getUIContext(),
+        notify(message, type) {
+          ctlNotices.push({ message, type });
+        },
+      },
+      onError: (error) => assert.fail(error.error),
+    });
+    await ctlRun.session.prompt("/cwd");
+    await ctlRun.session.prompt(`/cwd ${target}`);
+    await ctlRun.session.prompt("/cwd");
+    assert.equal(ctlNotices.length, 3);
+    assert.match(ctlNotices[2]?.message ?? "", /\(session: .*origin \[31m-ctl\)/);
+    for (const notice of ctlNotices) {
+      assert.doesNotMatch(notice.message, /[\u0000-\u001f\u007f-\u009f]/);
+    }
+  }
+
   console.log(
     "ok: real directory owner, native tools, policy snapshot, branches, recovery, SDK startup and process isolation",
   );

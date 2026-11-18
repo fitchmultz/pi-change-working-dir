@@ -14,14 +14,15 @@ import { parseSync } from "oxc-parser";
 import { sourceProfiles } from "./policy-baseline.ts";
 
 const { directiveInventory, ruleAllowances } = sourceProfiles;
-const repo = resolve(import.meta.dirname, "..");
 const { values: cli } = parseArgs({
   options: {
+    root: { type: "string" },
     "lint-config": { type: "string" },
     "format-config": { type: "string" },
   },
   strict: false,
 });
+const repo = typeof cli.root === "string" ? resolve(cli.root) : resolve(import.meta.dirname, "..");
 const lintConfigPath =
   typeof cli["lint-config"] === "string" ? cli["lint-config"] : ".oxlintrc.json";
 const formatConfigPath =
@@ -225,7 +226,7 @@ function same(a: unknown, b: unknown): boolean {
 }
 
 function readJson(path: string): Record<string, unknown> {
-  const parsed: unknown = JSON.parse(readFileSync(join(repo, path), "utf8"));
+  const parsed: unknown = JSON.parse(readFileSync(resolve(repo, path), "utf8"));
   return isRecord(parsed) ? parsed : {};
 }
 

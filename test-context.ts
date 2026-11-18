@@ -239,7 +239,7 @@ const factory: ExtensionFactory = (pi) => {
     name: "change_dir",
     label: "change_dir",
     description: "Select a fixture directory",
-    parameters: Type.Object({ path: Type.String() }),
+    parameters: Type.Object({ path: Type.String() }, { additionalProperties: false }),
     executionMode: "sequential",
     execute: async (_id, args, _signal, _update, ctx) => {
       change(ctx, args.path);
@@ -283,7 +283,7 @@ async function makeSession(
             name: "nested_cwd",
             label: "nested cwd",
             description: "Native composition fixture",
-            parameters: Type.Object({ path: Type.String() }),
+            parameters: Type.Object({ path: Type.String() }, { additionalProperties: false }),
             executionMode: "sequential",
             async execute(_id, args, _signal, _update, ctx) {
               const change = await ctx.executeTool("change_dir", { path: args.path });
