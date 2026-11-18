@@ -12,7 +12,7 @@ ID and title:
   QX-001 — in-place mutation of host-owned mutable objects at the extension API's documented seams.
 
 Rule, option, or threshold; installed tool versions:
-  eslint/no-param-reassign. oxlint 1.90.0; oxlint-tsgolint 7.0.2005 (type-aware); oxfmt 0.75.0;
+  eslint/no-param-reassign. oxlint 1.94.0; tsrs 7.1.0-beta.tsrs2 (type-aware); oxfmt 0.79.0;
   oxc-parser 0.156.0.
 
 Scope: files, authorized operations, origins, or bounded pattern:
@@ -74,7 +74,7 @@ ID and title:
   QX-002 — five positional parameters on ToolDefinition.execute implementations.
 
 Rule, option, or threshold; installed tool versions:
-  eslint/max-params (max 4). oxlint 1.90.0; oxlint-tsgolint 7.0.2005 (type-aware); oxfmt 0.75.0;
+  eslint/max-params (max 4). oxlint 1.94.0; tsrs 7.1.0-beta.tsrs2 (type-aware); oxfmt 0.79.0;
   oxc-parser 0.156.0.
 
 Scope: files, authorized operations, origins, or bounded pattern:
@@ -123,8 +123,8 @@ ID and title:
   QX-003 — explicit undefined arguments in required value positions of host APIs.
 
 Rule, option, or threshold; installed tool versions:
-  unicorn/no-useless-undefined (checkArguments true). oxlint 1.90.0; oxlint-tsgolint 7.0.2005
-  (type-aware); oxfmt 0.75.0; oxc-parser 0.156.0.
+  unicorn/no-useless-undefined (checkArguments true). oxlint 1.94.0; tsrs 7.1.0-beta.tsrs2
+  (type-aware); oxfmt 0.79.0; oxc-parser 0.156.0.
 
 Scope: files, authorized operations, origins, or bounded pattern:
   test.ts (5), test-paths.ts (6), test-context.ts (2), test-bash.ts (1), test-render.ts (1).
@@ -167,7 +167,7 @@ Retained protection, lost detection, and established assumptions:
   returns cannot be omitted.
 
 Review and revisit trigger:
-  Any oxlint or oxlint-tsgolint upgrade that changes which required-undefined positions are flagged
+  Any oxlint or tsrs upgrade that changes which required-undefined positions are flagged
   (the two production setStatus sites became unflagged between qualification runs), or any host
   release that makes these parameters optional.
 ```
@@ -179,8 +179,8 @@ ID and title:
   QX-004 — two assertions bridging host API typing that variance rules cannot express.
 
 Rule, option, or threshold; installed tool versions:
-  typescript/no-unsafe-type-assertion. oxlint 1.90.0; oxlint-tsgolint 7.0.2005 (type-aware);
-  oxfmt 0.75.0; oxc-parser 0.156.0.
+  typescript/no-unsafe-type-assertion. oxlint 1.94.0; tsrs 7.1.0-beta.tsrs2 (type-aware);
+  oxfmt 0.79.0; oxc-parser 0.156.0.
 
 Scope: files, authorized operations, origins, or bounded pattern:
   tool-wrapper.ts (2). Authorized operations: (1) the execution context view built with Object.create —
@@ -237,7 +237,7 @@ ID and title:
 Rule, option, or threshold; installed tool versions:
   typescript/no-floating-promises with allowForKnownSafeCalls =
   [{from: "package", package: "@types/node", name: [nodeTest, nodeIt, nodeDescribe, nodeSuite]}].
-  oxlint 1.90.0; oxlint-tsgolint 7.0.2005 (type-aware); oxfmt 0.75.0; oxc-parser 0.156.0.
+  oxlint 1.94.0; tsrs 7.1.0-beta.tsrs2 (type-aware); oxfmt 0.79.0; oxc-parser 0.156.0.
 
 Scope: files, authorized operations, origins, or bounded pattern:
   The test-profile override in .oxlintrc.json (test*.ts and the standard's test-file patterns).
@@ -284,8 +284,70 @@ Retained protection, lost detection, and established assumptions:
   finding in `npm run lint`.
 
 Review and revisit trigger:
-  Any upgrade of oxlint or oxlint-tsgolint, any new registration form, or the first use of a
+  Any upgrade of oxlint or tsrs, any new registration form, or the first use of a
   shorthand modifier through a mapped name. Re-qualify against npm run lint and update this record.
+```
+
+## QX-008 — prerelease tsrs type-aware backend in place of stable oxlint-tsgolint
+
+```text
+ID and title:
+  QX-008 — adopt prerelease tsrs@7.1.0-beta.tsrs2 as the type-aware lint backend in place of
+  stable oxlint-tsgolint.
+
+Rule, option, or threshold; installed tool versions:
+  Section 5.1 ("latest stable published releases of Oxlint, oxlint-tsgolint, Oxfmt"). oxlint
+  1.94.0 (2026-11-16T12:26Z); tsrs 7.1.0-beta.tsrs2 (2026-11-16T11:59Z); oxfmt 0.79.0
+  (2026-11-16T12:27Z); oxc-parser 0.156.0; typescript 7.0.2.
+
+Scope: files, authorized operations, origins, or bounded pattern:
+  package.json / package-lock.json devDependencies and scripts/policy-baseline.ts toolFloors
+  (`tsrs: "7.1.0-beta.tsrs2"`), plus type-aware lint execution (oxlint discovers
+  node_modules/.bin/tsrs-lint natively).
+
+Directive selectors/inventory and optional duplication bounds:
+  None (backend package substitution only; directive inventory stays at 37 sites across QX-001..006).
+
+Diagnostic and required contract:
+  Section 5.1 requires stable published releases, whereas tsrs publishes prereleases only
+  (dist-tags.latest is 0.25.0-ts7.1.0-beta; 7.1.0-beta.tsrs2 is an untagged newer prerelease;
+  stable oxlint-tsgolint 7.0.2007 remains published on npm).
+
+Actual compliant alternative and demonstrated quality cost:
+  Retaining stable oxlint-tsgolint@7.0.2007 preserves Section 5.1 directly. In a matched A/B
+  benchmark on mitchs-m5-mbp (Darwin arm64, oxlint 1.94.0 running `oxlint --deny-warnings .`,
+  median of 3 warm runs each with OXLINT_TSGOLINT_PATH), oxlint-tsgolint@7.0.2007 took 0.43s wall
+  time and 753.6 MiB maximum RSS vs 0.15s wall time and 282.8 MiB maximum RSS with
+  tsrs@7.1.0-beta.tsrs2 (2.87x slower, 2.66x / 470.8 MiB higher peak RSS; both exited 0).
+
+Chosen adjustment and why its scope is appropriate:
+  Owner-approved substitution of tsrs@7.1.0-beta.tsrs2, guarded by semver.lt/semver.valid in
+  scripts/check-policy.ts so downgrades below 7.1.0-beta.tsrs2 fail policy:check. oxlint 1.94.0
+  discovers tsrs-lint automatically and fails closed (exit 1) when missing.
+
+Structural comparison or unsafe-type evidence, where applicable:
+  Not a structural exception. A matched diagnostic parity probe across production-profile
+  violations (typescript(no-floating-promises), typescript(no-misused-promises),
+  typescript(no-unsafe-assignment), typescript(no-unsafe-return),
+  typescript(no-unsafe-member-access), typescript(no-unsafe-type-assertion),
+  typescript(prefer-promise-reject-errors)) reported identical 7/7 diagnostics on exact lines
+  under both oxlint-tsgolint@7.0.2007 and tsrs@7.1.0-beta.tsrs2 (exit 1).
+
+Verification commands, relevant tests, and results:
+  npm run check (check:lock, policy:check, format:check, lint, typecheck, test, pack:check) and
+  npm run check:compat (check:lock, policy:check, format:check, lint, typecheck, test) exit 0 on
+  2026-11-18 with oxlint 1.94.0 + tsrs 7.1.0-beta.tsrs2 + oxfmt 0.79.0; test-quality.ts proves
+  policy:check rejects tsrs 7.1.0-beta.tsrs1, accepts 7.1.0, and enforces
+  typescript(no-floating-promises) on a real isolated violation under tsrs.
+
+Retained protection, lost detection, and established assumptions:
+  All type-aware rules, QX-001..QX-007 controls, and tsc compiler checks stay active; diagnostic
+  parity across the seven exercised type-aware rules is established by the parity probe and
+  test-quality.ts control above.
+
+Review and revisit trigger:
+  First stable tsrs release, any oxlint upgrade changing backend discovery, or any type-aware
+  diagnostic discrepancy.
 ```
 
 No other exceptions exist. Structural thresholds, formatter settings, and the baseline rule set are

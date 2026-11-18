@@ -11,6 +11,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -118,6 +119,49 @@ nodeTest(
       ]);
       assert.notEqual(formatCheck.code, 0, "a downgraded format configuration must fail policy");
       assert.match(formatCheck.output, /differs/);
+
+      const pkgRaw: unknown = JSON.parse(readFileSync(join(repo, "package.json"), "utf8"));
+      const originalPkg = readFileSync(join(root, "package.json"), "utf8");
+      const downgradedPkg = structuredClone(isRecord(pkgRaw) ? pkgRaw : {});
+      if (isRecord(downgradedPkg.devDependencies)) {
+        downgradedPkg.devDependencies.tsrs = "7.1.0-beta.tsrs1";
+      }
+      writeFileSync(join(root, "package.json"), JSON.stringify(downgradedPkg));
+      const tsrsDowngrade = run(process.execPath, ["scripts/check-policy.ts", "--root", root]);
+      assert.notEqual(tsrsDowngrade.code, 0, "a below-floor tsrs prerelease must fail policy");
+      assert.match(tsrsDowngrade.output, /tsrs 7\.1\.0-beta\.tsrs1 is below/);
+
+      const promotedPkg = structuredClone(isRecord(pkgRaw) ? pkgRaw : {});
+      if (isRecord(promotedPkg.devDependencies)) {
+        promotedPkg.devDependencies.tsrs = "7.1.0";
+      }
+      writeFileSync(join(root, "package.json"), JSON.stringify(promotedPkg));
+      const tsrsStable = run(process.execPath, ["scripts/check-policy.ts", "--root", root]);
+      assert.equal(tsrsStable.code, 0, tsrsStable.output);
+      writeFileSync(join(root, "package.json"), originalPkg);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+
+nodeTest(
+  "type-aware lint enforces typescript(no-floating-promises) on a real violation under tsrs",
+  () => {
+    const root = createIsolatedPolicyRoot();
+    try {
+      symlinkSync(join(repo, "node_modules"), join(root, "node_modules"));
+      writeFileSync(
+        join(root, "floating-probe.ts"),
+        "async function work(): Promise<void> {}\nwork();\n",
+      );
+      const result = run(
+        join(repo, "node_modules", ".bin", "oxlint"),
+        ["--deny-warnings", "floating-probe.ts"],
+        root,
+      );
+      assert.notEqual(result.code, 0, "floating promise violation must fail lint");
+      assert.match(result.output, /typescript\(no-floating-promises\)/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

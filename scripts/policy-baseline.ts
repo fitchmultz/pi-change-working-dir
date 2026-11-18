@@ -14,7 +14,7 @@ export type DirectiveEntry = { file: string; rule: string; id: string; count: nu
 
 export type SourceProfiles = {
   readonly standard: string;
-  /** Installed toolchain, verified current against the public registry on 2026-11-01 (section 5.1). */
+  /** Tool floors: oxlint@1.94.0 and oxfmt@0.79.0 verified current on 2026-11-18; tsrs@7.1.0-beta.tsrs2 is a prerelease backend under QX-008; oxc-parser@0.156.0 is retained from adoption. */
   readonly toolFloors: Record<string, string>;
   /** Compiler options that must stay enabled project-wide (section 4.2). No allowJs/checkJs: the
    * repository contains no maintained JavaScript. */
@@ -37,9 +37,9 @@ export type SourceProfiles = {
 export const sourceProfiles: SourceProfiles = {
   standard: "Strict Oxlint and Oxfmt Engineering Standard v5.1.2",
   toolFloors: {
-    oxlint: "1.90.0",
-    "oxlint-tsgolint": "7.0.2005",
-    oxfmt: "0.75.0",
+    oxlint: "1.94.0",
+    tsrs: "7.1.0-beta.tsrs2",
+    oxfmt: "0.79.0",
     "oxc-parser": "0.156.0",
   },
   requiredCompilerOptions: [
