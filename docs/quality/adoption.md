@@ -17,9 +17,7 @@ depart from the standard's own values are recorded in [quality-exceptions.md](qu
 - Node.js 24.22.3 (24.x) or 26.13.1 and later (`package.json` engines); `package.json` pins `npm@12.2.0` as the package
   manager. Install uses the public npm registry only; `npm run check:lock` rejects a lockfile with
   private-registry URLs.
-- Pi runtime targets: the official `pi-coding-agent` release declared in `devDependencies` and the
-  fork release this repository is developed against; qualification swaps the installed host through
-  `PI_PACKAGE_DIR` without changing the pinned declarations.
+- Pi runtime targets: official Pi 1.5.2+ (locked in `devDependencies`; shared CI qualifies the latest official Pi release) and the maintained fork release; local qualification swaps the installed host through `PI_PACKAGE_DIR` without changing the pinned declarations.
 
 ## Installed tool versions
 
@@ -64,7 +62,8 @@ depart from the standard's own values are recorded in [quality-exceptions.md](qu
 - oxfmt owns every supported file in the repository; no other formatter is configured. Formatting
   is expected to be idempotent, and `format:check` proves it.
 - No code generators produce maintained sources. `test-quality.ts` verifies `scripts/check-policy.ts`
-  and `scripts/run-gates.ts` against isolated temporary directories without repository mutations.
+  against isolated temporary directories (`--root`) and runs `scripts/run-gates.ts` read-only on
+  the repository without mutating tracked files.
 
 ## Migration status
 
