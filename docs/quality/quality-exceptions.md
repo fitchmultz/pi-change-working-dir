@@ -12,7 +12,7 @@ ID and title:
   QX-001 — in-place mutation of host-owned mutable objects at the extension API's documented seams.
 
 Rule, option, or threshold; installed tool versions:
-  eslint/no-param-reassign. oxlint 1.90.0; oxlint-tsgolint 7.0.2005 (type-aware); oxfmt 0.75.0;
+  eslint/no-param-reassign. oxlint 1.94.0; tsrs 7.1.0-beta.tsrs2 (type-aware); oxfmt 0.79.0;
   oxc-parser 0.156.0.
 
 Scope: files, authorized operations, origins, or bounded pattern:
@@ -74,7 +74,7 @@ ID and title:
   QX-002 — five positional parameters on ToolDefinition.execute implementations.
 
 Rule, option, or threshold; installed tool versions:
-  eslint/max-params (max 4). oxlint 1.90.0; oxlint-tsgolint 7.0.2005 (type-aware); oxfmt 0.75.0;
+  eslint/max-params (max 4). oxlint 1.94.0; tsrs 7.1.0-beta.tsrs2 (type-aware); oxfmt 0.79.0;
   oxc-parser 0.156.0.
 
 Scope: files, authorized operations, origins, or bounded pattern:
@@ -123,8 +123,8 @@ ID and title:
   QX-003 — explicit undefined arguments in required value positions of host APIs.
 
 Rule, option, or threshold; installed tool versions:
-  unicorn/no-useless-undefined (checkArguments true). oxlint 1.90.0; oxlint-tsgolint 7.0.2005
-  (type-aware); oxfmt 0.75.0; oxc-parser 0.156.0.
+  unicorn/no-useless-undefined (checkArguments true). oxlint 1.94.0; tsrs 7.1.0-beta.tsrs2
+  (type-aware); oxfmt 0.79.0; oxc-parser 0.156.0.
 
 Scope: files, authorized operations, origins, or bounded pattern:
   test.ts (5), test-paths.ts (6), test-context.ts (2), test-bash.ts (1), test-render.ts (1).
@@ -167,7 +167,7 @@ Retained protection, lost detection, and established assumptions:
   returns cannot be omitted.
 
 Review and revisit trigger:
-  Any oxlint or oxlint-tsgolint upgrade that changes which required-undefined positions are flagged
+  Any oxlint or tsrs upgrade that changes which required-undefined positions are flagged
   (the two production setStatus sites became unflagged between qualification runs), or any host
   release that makes these parameters optional.
 ```
@@ -179,8 +179,8 @@ ID and title:
   QX-004 — two assertions bridging host API typing that variance rules cannot express.
 
 Rule, option, or threshold; installed tool versions:
-  typescript/no-unsafe-type-assertion. oxlint 1.90.0; oxlint-tsgolint 7.0.2005 (type-aware);
-  oxfmt 0.75.0; oxc-parser 0.156.0.
+  typescript/no-unsafe-type-assertion. oxlint 1.94.0; tsrs 7.1.0-beta.tsrs2 (type-aware);
+  oxfmt 0.79.0; oxc-parser 0.156.0.
 
 Scope: files, authorized operations, origins, or bounded pattern:
   tool-wrapper.ts (2). Authorized operations: (1) the execution context view built with Object.create —
@@ -237,7 +237,7 @@ ID and title:
 Rule, option, or threshold; installed tool versions:
   typescript/no-floating-promises with allowForKnownSafeCalls =
   [{from: "package", package: "@types/node", name: [nodeTest, nodeIt, nodeDescribe, nodeSuite]}].
-  oxlint 1.90.0; oxlint-tsgolint 7.0.2005 (type-aware); oxfmt 0.75.0; oxc-parser 0.156.0.
+  oxlint 1.94.0; tsrs 7.1.0-beta.tsrs2 (type-aware); oxfmt 0.79.0; oxc-parser 0.156.0.
 
 Scope: files, authorized operations, origins, or bounded pattern:
   The test-profile override in .oxlintrc.json (test*.ts and the standard's test-file patterns).
@@ -284,7 +284,7 @@ Retained protection, lost detection, and established assumptions:
   finding in `npm run lint`.
 
 Review and revisit trigger:
-  Any upgrade of oxlint or oxlint-tsgolint, any new registration form, or the first use of a
+  Any upgrade of oxlint or tsrs, any new registration form, or the first use of a
   shorthand modifier through a mapped name. Re-qualify against npm run lint and update this record.
 ```
 

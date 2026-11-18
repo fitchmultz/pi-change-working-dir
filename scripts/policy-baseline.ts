@@ -37,9 +37,9 @@ export type SourceProfiles = {
 export const sourceProfiles: SourceProfiles = {
   standard: "Strict Oxlint and Oxfmt Engineering Standard v5.1.2",
   toolFloors: {
-    oxlint: "1.90.0",
-    "oxlint-tsgolint": "7.0.2005",
-    oxfmt: "0.75.0",
+    oxlint: "1.94.0",
+    tsrs: "7.1.0-beta.tsrs2",
+    oxfmt: "0.79.0",
     "oxc-parser": "0.156.0",
   },
   requiredCompilerOptions: [

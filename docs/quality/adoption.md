@@ -21,13 +21,13 @@ depart from the standard's own values are recorded in [quality-exceptions.md](qu
 
 ## Installed tool versions
 
-| Tool            | Version  | Role                                            |
-| --------------- | -------- | ----------------------------------------------- |
-| oxlint          | 1.90.0   | Lint gate, type-aware through the checker below |
-| oxlint-tsgolint | 7.0.2005 | Type-aware checker                              |
-| oxfmt           | 0.75.0   | Formatter                                       |
-| oxc-parser      | 0.156.0  | Parser used by the policy verifier              |
-| typescript      | 7.0.2    | Compiler gate (`tsc`)                           |
+| Tool       | Version          | Role                                            |
+| ---------- | ---------------- | ----------------------------------------------- |
+| oxlint     | 1.94.0           | Lint gate, type-aware through the backend below |
+| tsrs       | 7.1.0-beta.tsrs2 | Type-aware backend (`tsrs-lint`)                |
+| oxfmt      | 0.79.0           | Formatter                                       |
+| oxc-parser | 0.156.0          | Parser used by the policy verifier              |
+| typescript | 7.0.2            | Compiler gate (`tsc`)                           |
 
 `scripts/policy-baseline.ts` records these as the qualification floors the verifier checks against.
 
