@@ -3,8 +3,7 @@
  * adopted standard copy (`docs/quality/strict-oxlint-oxfmt-5.1.2.md`); this file records what the
  * repository itself decides: the source-profile mapping, the recorded allowances and directive
  * inventory, and the tool versions the configuration was qualified against. Evidence for each
- * recorded exception lives in `docs/quality/quality-exceptions.md` and is exercised by the
- * qualification controls in `test-quality.ts`.
+ * recorded exception lives in `docs/quality/quality-exceptions.md`.
  */
 
 /** A recorded rule allowance (standard section 2), applied to a profile before comparison. */
@@ -74,7 +73,7 @@ export const sourceProfiles: SourceProfiles = {
     },
     {
       profile: "tests",
-      globs: ["test*.ts", "probes/**/*.ts"],
+      globs: ["test*.ts"],
     },
   ],
   ruleAllowances: [
