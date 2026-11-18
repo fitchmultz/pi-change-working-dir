@@ -314,25 +314,36 @@ Diagnostic and required contract:
   stable oxlint-tsgolint 7.0.2007 remains published on npm).
 
 Actual compliant alternative and demonstrated quality cost:
-  Retaining stable oxlint-tsgolint@7.0.2007 preserves Section 5.1 directly at ~2.9x–5.3x slower
-  type-aware lint runtime and ~3x–6x higher peak memory across ecosystem repos.
+  Retaining stable oxlint-tsgolint@7.0.2007 preserves Section 5.1 directly. In a matched A/B
+  benchmark on mitchs-m5-mbp (Darwin arm64, oxlint 1.94.0 running `oxlint --deny-warnings .`,
+  median of 3 warm runs each with OXLINT_TSGOLINT_PATH), oxlint-tsgolint@7.0.2007 took 0.43s wall
+  time and 753.6 MiB maximum RSS vs 0.15s wall time and 282.8 MiB maximum RSS with
+  tsrs@7.1.0-beta.tsrs2 (2.87x slower, 2.66x / 470.8 MiB higher peak RSS; both exited 0).
 
 Chosen adjustment and why its scope is appropriate:
-  Owner-approved substitution of tsrs@7.1.0-beta.tsrs2, guarded by SemVer prerelease ordering in
+  Owner-approved substitution of tsrs@7.1.0-beta.tsrs2, guarded by semver.lt/semver.valid in
   scripts/check-policy.ts so downgrades below 7.1.0-beta.tsrs2 fail policy:check. oxlint 1.94.0
-  discovers tsrs-lint automatically and fails closed if absent.
+  discovers tsrs-lint automatically and fails closed (exit 1) when missing.
 
 Structural comparison or unsafe-type evidence, where applicable:
-  Not a structural exception.
+  Not a structural exception. A matched diagnostic parity probe across production-profile
+  violations (typescript(no-floating-promises), typescript(no-misused-promises),
+  typescript(no-unsafe-assignment), typescript(no-unsafe-return),
+  typescript(no-unsafe-member-access), typescript(no-unsafe-type-assertion),
+  typescript(prefer-promise-reject-errors)) reported identical 7/7 diagnostics on exact lines
+  under both oxlint-tsgolint@7.0.2007 and tsrs@7.1.0-beta.tsrs2 (exit 1).
 
 Verification commands, relevant tests, and results:
-  npm run check:compat (check:lock, policy:check, format:check, lint, typecheck, test, pack:check)
-  passes on 2026-11-18 with oxlint 1.94.0 + tsrs 7.1.0-beta.tsrs2; test-quality.ts proves
-  policy:check rejects tsrs 7.1.0-beta.tsrs1 and accepts 7.1.0.
+  npm run check (check:lock, policy:check, format:check, lint, typecheck, test, pack:check) and
+  npm run check:compat (check:lock, policy:check, format:check, lint, typecheck, test) exit 0 on
+  2026-11-18 with oxlint 1.94.0 + tsrs 7.1.0-beta.tsrs2 + oxfmt 0.79.0; test-quality.ts proves
+  policy:check rejects tsrs 7.1.0-beta.tsrs1, accepts 7.1.0, and enforces
+  typescript(no-floating-promises) on a real isolated violation under tsrs.
 
 Retained protection, lost detection, and established assumptions:
-  All type-aware rules, QX-001..QX-007 controls, and tsc compiler checks stay active; assumes
-  tsrs@7.1.0-beta.tsrs2 keeps diagnostic parity with oxlint-tsgolint.
+  All type-aware rules, QX-001..QX-007 controls, and tsc compiler checks stay active; diagnostic
+  parity across the seven exercised type-aware rules is established by the parity probe and
+  test-quality.ts control above.
 
 Review and revisit trigger:
   First stable tsrs release, any oxlint upgrade changing backend discovery, or any type-aware

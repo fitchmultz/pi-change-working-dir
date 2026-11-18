@@ -11,6 +11,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -138,6 +139,29 @@ nodeTest(
       const tsrsStable = run(process.execPath, ["scripts/check-policy.ts", "--root", root]);
       assert.equal(tsrsStable.code, 0, tsrsStable.output);
       writeFileSync(join(root, "package.json"), originalPkg);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+
+nodeTest(
+  "type-aware lint enforces typescript(no-floating-promises) on a real violation under tsrs",
+  () => {
+    const root = createIsolatedPolicyRoot();
+    try {
+      symlinkSync(join(repo, "node_modules"), join(root, "node_modules"));
+      writeFileSync(
+        join(root, "floating-probe.ts"),
+        "async function work(): Promise<void> {}\nwork();\n",
+      );
+      const result = run(
+        join(repo, "node_modules", ".bin", "oxlint"),
+        ["--deny-warnings", "floating-probe.ts"],
+        root,
+      );
+      assert.notEqual(result.code, 0, "floating promise violation must fail lint");
+      assert.match(result.output, /typescript\(no-floating-promises\)/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
