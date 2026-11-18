@@ -118,6 +118,26 @@ nodeTest(
       ]);
       assert.notEqual(formatCheck.code, 0, "a downgraded format configuration must fail policy");
       assert.match(formatCheck.output, /differs/);
+
+      const pkgRaw: unknown = JSON.parse(readFileSync(join(repo, "package.json"), "utf8"));
+      const originalPkg = readFileSync(join(root, "package.json"), "utf8");
+      const downgradedPkg = structuredClone(isRecord(pkgRaw) ? pkgRaw : {});
+      if (isRecord(downgradedPkg.devDependencies)) {
+        downgradedPkg.devDependencies.tsrs = "7.1.0-beta.tsrs1";
+      }
+      writeFileSync(join(root, "package.json"), JSON.stringify(downgradedPkg));
+      const tsrsDowngrade = run(process.execPath, ["scripts/check-policy.ts", "--root", root]);
+      assert.notEqual(tsrsDowngrade.code, 0, "a below-floor tsrs prerelease must fail policy");
+      assert.match(tsrsDowngrade.output, /tsrs 7\.1\.0-beta\.tsrs1 is below/);
+
+      const promotedPkg = structuredClone(isRecord(pkgRaw) ? pkgRaw : {});
+      if (isRecord(promotedPkg.devDependencies)) {
+        promotedPkg.devDependencies.tsrs = "7.1.0";
+      }
+      writeFileSync(join(root, "package.json"), JSON.stringify(promotedPkg));
+      const tsrsStable = run(process.execPath, ["scripts/check-policy.ts", "--root", root]);
+      assert.equal(tsrsStable.code, 0, tsrsStable.output);
+      writeFileSync(join(root, "package.json"), originalPkg);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -71,8 +71,8 @@ Complete. The phased migration (standard section 9.2) finished with this change:
 policy verification landed first, the production sources were decomposed into typed modules and
 repaired to zero findings, and the test sources followed — every manual finding fixed in source,
 the lint gate joined `check`/`check:compat`, and no finding budget or baseline filter was ever
-introduced. Seven quality exceptions are recorded (one rule allowance, six directive families,
-37 inventoried site directives), each with evidence in
+introduced. Eight quality exceptions are recorded (one rule allowance, six directive families
+with 37 inventoried site directives, and QX-008 for the prerelease `tsrs` backend), each with evidence in
 [quality-exceptions.md](quality-exceptions.md).
 
 ## Integrated verification

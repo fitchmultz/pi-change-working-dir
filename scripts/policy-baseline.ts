@@ -14,7 +14,7 @@ export type DirectiveEntry = { file: string; rule: string; id: string; count: nu
 
 export type SourceProfiles = {
   readonly standard: string;
-  /** Installed toolchain, verified current against the public registry on 2026-11-01 (section 5.1). */
+  /** Installed toolchain, verified current against the public registry on 2026-11-18 (`tsrs` prerelease under QX-008). */
   readonly toolFloors: Record<string, string>;
   /** Compiler options that must stay enabled project-wide (section 4.2). No allowJs/checkJs: the
    * repository contains no maintained JavaScript. */

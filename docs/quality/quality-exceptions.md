@@ -288,6 +288,57 @@ Review and revisit trigger:
   shorthand modifier through a mapped name. Re-qualify against npm run lint and update this record.
 ```
 
+## QX-008 — prerelease tsrs type-aware backend in place of stable oxlint-tsgolint
+
+```text
+ID and title:
+  QX-008 — adopt prerelease tsrs@7.1.0-beta.tsrs2 as the type-aware lint backend in place of
+  stable oxlint-tsgolint.
+
+Rule, option, or threshold; installed tool versions:
+  Section 5.1 ("latest stable published releases of Oxlint, oxlint-tsgolint, Oxfmt"). oxlint
+  1.94.0 (2026-11-16T12:26Z); tsrs 7.1.0-beta.tsrs2 (2026-11-16T11:59Z); oxfmt 0.79.0
+  (2026-11-16T12:27Z); oxc-parser 0.156.0; typescript 7.0.2.
+
+Scope: files, authorized operations, origins, or bounded pattern:
+  package.json / package-lock.json devDependencies and scripts/policy-baseline.ts toolFloors
+  (`tsrs: "7.1.0-beta.tsrs2"`), plus type-aware lint execution (oxlint discovers
+  node_modules/.bin/tsrs-lint natively).
+
+Directive selectors/inventory and optional duplication bounds:
+  None (backend package substitution only; directive inventory stays at 37 sites across QX-001..006).
+
+Diagnostic and required contract:
+  Section 5.1 requires stable published releases, whereas tsrs publishes prereleases only
+  (dist-tags.latest is 0.25.0-ts7.1.0-beta; 7.1.0-beta.tsrs2 is an untagged newer prerelease;
+  stable oxlint-tsgolint 7.0.2007 remains published on npm).
+
+Actual compliant alternative and demonstrated quality cost:
+  Retaining stable oxlint-tsgolint@7.0.2007 preserves Section 5.1 directly at ~2.9x–5.3x slower
+  type-aware lint runtime and ~3x–6x higher peak memory across ecosystem repos.
+
+Chosen adjustment and why its scope is appropriate:
+  Owner-approved substitution of tsrs@7.1.0-beta.tsrs2, guarded by SemVer prerelease ordering in
+  scripts/check-policy.ts so downgrades below 7.1.0-beta.tsrs2 fail policy:check. oxlint 1.94.0
+  discovers tsrs-lint automatically and fails closed if absent.
+
+Structural comparison or unsafe-type evidence, where applicable:
+  Not a structural exception.
+
+Verification commands, relevant tests, and results:
+  npm run check:compat (check:lock, policy:check, format:check, lint, typecheck, test, pack:check)
+  passes on 2026-11-18 with oxlint 1.94.0 + tsrs 7.1.0-beta.tsrs2; test-quality.ts proves
+  policy:check rejects tsrs 7.1.0-beta.tsrs1 and accepts 7.1.0.
+
+Retained protection, lost detection, and established assumptions:
+  All type-aware rules, QX-001..QX-007 controls, and tsc compiler checks stay active; assumes
+  tsrs@7.1.0-beta.tsrs2 keeps diagnostic parity with oxlint-tsgolint.
+
+Review and revisit trigger:
+  First stable tsrs release, any oxlint upgrade changing backend discovery, or any type-aware
+  diagnostic discrepancy.
+```
+
 No other exceptions exist. Structural thresholds, formatter settings, and the baseline rule set are
 the standard's own values. Test-profile allowances and test-file directives, if any become
 necessary, will be recorded here with their own ids.

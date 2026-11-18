@@ -238,17 +238,73 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function parseSemver(
+  raw: string,
+): { core: [number, number, number]; prerelease: readonly string[] } | null {
+  const withoutBuild = raw.split("+", 1)[0] ?? raw;
+  const dash = withoutBuild.indexOf("-");
+  const coreText = dash === -1 ? withoutBuild : withoutBuild.slice(0, dash);
+  const preText = dash === -1 ? "" : withoutBuild.slice(dash + 1);
+  if (!/^\d+\.\d+\.\d+$/.test(coreText)) {
+    return null;
+  }
+  const parts = coreText.split(".").map((part) => Number.parseInt(part, 10));
+  return {
+    core: [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0],
+    prerelease: preText === "" ? [] : preText.split("."),
+  };
+}
+
+function comparePrereleaseIdentifier(left: string, right: string): number {
+  const leftNumeric = /^\d+$/.test(left);
+  const rightNumeric = /^\d+$/.test(right);
+  if (leftNumeric && rightNumeric) {
+    return Math.sign(Number(left) - Number(right));
+  }
+  if (leftNumeric !== rightNumeric) {
+    return leftNumeric ? -1 : 1;
+  }
+  return left < right ? -1 : 1;
+}
+
+function comparePrereleases(left: readonly string[], right: readonly string[]): number {
+  if (left.length === 0 || right.length === 0) {
+    if (left.length === right.length) {
+      return 0;
+    }
+    return left.length === 0 ? 1 : -1;
+  }
+  const limit = Math.max(left.length, right.length);
+  for (let i = 0; i < limit; i += 1) {
+    const l = left[i];
+    const r = right[i];
+    if (l === undefined || r === undefined) {
+      return l === undefined ? -1 : 1;
+    }
+    if (l !== r) {
+      return comparePrereleaseIdentifier(l, r);
+    }
+  }
+  return 0;
+}
+
 function compareVersions(a: string, b: string): number {
-  const left = a.split(".").map(Number);
-  const right = b.split(".").map(Number);
+  const left = parseSemver(a);
+  const right = parseSemver(b);
+  if (left === null || right === null) {
+    if (left === right) {
+      return 0;
+    }
+    return left === null ? -1 : 1;
+  }
   for (let i = 0; i < 3; i += 1) {
-    const l = left[i] ?? 0;
-    const r = right[i] ?? 0;
+    const l = left.core[i] ?? 0;
+    const r = right.core[i] ?? 0;
     if (l !== r) {
       return l < r ? -1 : 1;
     }
   }
-  return 0;
+  return comparePrereleases(left.prerelease, right.prerelease);
 }
 
 /** Repository source inventory, relative forward-slash paths, honoring .gitignore-level skips. */
