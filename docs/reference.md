@@ -90,7 +90,8 @@ Pi has no checkpoint, Bash-cwd-hook, or file-publisher exports. Branch recovery 
 
 - Models that declare `supportsMidConvoSystemMessages: true` receive snapshots as system updates.
 - Gemini, Bedrock, and models without that flag receive snapshots as user-role context. This keeps the updates out of the leading prompt when Pi folds system messages together.
-- On Bedrock, the extension puts the context inside an adjacent user turn or tool result when possible. It does not add a second user turn beside those messages.
+
+Pi's Bedrock Converse adapter owns folding adjacent messages with the same role into one turn. The adapter fix is tracked in PIF-220. Bedrock models that reject adjacent user turns require a Pi build with that fix.
 
 The leading system message of every request states the directory that the journal's first system message recorded, before and after each compaction and whatever directory changes the session made. A provider can therefore still read the tool list and the prompt from its cache after a compaction. The model learns the selected directory and any notice from directory updates:
 

@@ -1,8 +1,7 @@
-import {
-  type ContextWithSystemEvent,
-  type ExtensionAPI,
-  type ExtensionContext,
-  convertToLlm,
+import type {
+  ContextWithSystemEvent,
+  ExtensionAPI,
+  ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { isRecord } from "./native-paths.ts";
 
@@ -13,8 +12,7 @@ type Snapshot = { cwd: string; notice?: string | undefined };
 type Messages = ContextWithSystemEvent["messages"];
 
 type DirectoryUpdate = Snapshot & { timestamp: number };
-type BodyEntry = Messages[number] | DirectoryUpdate;
-type Presentation = "system" | "user" | "converse";
+type Presentation = "system" | "user";
 
 /** What the journal says about the directory outside the messages of the current context window. */
 type Carried = {
@@ -59,13 +57,11 @@ function cwdSection(cwd: string): string {
 }
 
 function presentationFor(model: ExtensionContext["model"]): Presentation {
-  if (model?.api === "bedrock-converse-stream") {
-    return "converse";
-  }
   if (
     model === undefined ||
     model.api === "google-generative-ai" ||
-    model.api === "google-vertex"
+    model.api === "google-vertex" ||
+    model.api === "bedrock-converse-stream"
   ) {
     return "user";
   }
@@ -77,24 +73,24 @@ function presentationFor(model: ExtensionContext["model"]): Presentation {
     : "user";
 }
 
-function noticeSection(notice: string | undefined): string | null {
-  return notice === undefined ? null : `<change-working-dir>\n${notice}\n</change-working-dir>`;
-}
-
-function updateText({ cwd, notice }: Snapshot): string {
-  const warning = noticeSection(notice);
-  return warning === null ? cwdSection(cwd) : `${cwdSection(cwd)}\n\n${warning}`;
-}
-
-function presentUpdate(update: DirectoryUpdate, mode: "user" | "system"): Messages[number] {
-  const { cwd, notice, timestamp } = update;
+function presentUpdate(
+  { cwd, notice, timestamp }: DirectoryUpdate,
+  mode: Presentation,
+): Messages[number] {
+  const directory = cwdSection(cwd);
+  const warning =
+    notice === undefined ? null : `<change-working-dir>\n${notice}\n</change-working-dir>`;
   if (mode === "user") {
-    return { role: "user", content: updateText(update), timestamp };
+    return {
+      role: "user",
+      content: warning === null ? directory : `${directory}\n\n${warning}`,
+      timestamp,
+    };
   }
   return {
     role: "system",
     content: "",
-    sections: { cwd: cwdSection(cwd), "change-working-dir": noticeSection(notice) },
+    sections: { cwd: directory, "change-working-dir": warning },
     timestamp,
   };
 }
@@ -108,10 +104,10 @@ function updateOf(message: Messages[number]): DirectoryUpdate | undefined {
   return state === undefined ? undefined : { ...state, timestamp: message.timestamp };
 }
 
-function bodyEntry(message: Messages[number], mode: Presentation): BodyEntry {
+function presentMessage(message: Messages[number], mode: Presentation): Messages[number] {
   const update = updateOf(message);
   if (update !== undefined) {
-    return update;
+    return presentUpdate(update, mode);
   }
   if (mode !== "system" && message.role === "system" && message.sections?.cwd !== undefined) {
     // Older journals contain native cwd patches as well as snapshots. Keep their other changes.
@@ -119,66 +115,6 @@ function bodyEntry(message: Messages[number], mode: Presentation): BodyEntry {
     return { ...message, sections };
   }
   return message;
-}
-
-function prependConverseUpdate(
-  entry: Messages[number] | undefined,
-  text: string,
-  timestamp: number,
-): Messages {
-  const next = entry === undefined ? undefined : convertToLlm([entry])[0];
-  const block = { type: "text", text } as const;
-  if (next?.role === "toolResult") {
-    return [{ ...next, content: [block, ...next.content] }];
-  }
-  if (next?.role === "user") {
-    const content =
-      typeof next.content === "string"
-        ? [{ type: "text" as const, text: next.content }]
-        : next.content;
-    return [{ ...next, content: [block, ...content] }];
-  }
-  const update = { role: "user", content: text, timestamp } as const;
-  return entry === undefined ? [update] : [update, entry];
-}
-
-/** Converse groups tool results into one user turn. Do not insert another user turn beside it. */
-function converseBody(entries: BodyEntry[]): Messages {
-  const messages: Messages = [];
-  let pending: DirectoryUpdate[] = [];
-  const append = (entry?: Messages[number]): void => {
-    const first = pending[0];
-    if (first !== undefined && entry?.role !== "system") {
-      const text = pending.map(updateText).join("\n\n");
-      pending = [];
-      const index = messages.findLastIndex((message) => message.role !== "system");
-      const previous = messages[index];
-      if (previous?.role !== "toolResult") {
-        messages.push(...prependConverseUpdate(entry, text, first.timestamp));
-        return;
-      }
-      messages[index] = { ...previous, content: [...previous.content, { type: "text", text }] };
-    }
-    if (entry !== undefined) {
-      messages.push(entry);
-    }
-  };
-  for (const entry of entries) {
-    if ("role" in entry) {
-      append(entry);
-    } else {
-      pending.push(entry);
-    }
-  }
-  append();
-  return messages;
-}
-
-function renderBody(entries: BodyEntry[], mode: Presentation): Messages {
-  if (mode === "converse") {
-    return converseBody(entries);
-  }
-  return entries.map((entry) => ("role" in entry ? entry : presentUpdate(entry, mode)));
 }
 
 /** Whether the ancestry from the leaf still reaches the prefix the cache was read from. */
@@ -293,9 +229,9 @@ function present(
     ...head.filter((message) => message.role !== "system"),
     ...messages.slice(head.length),
   ];
-  const body = [...others, ...later].map((message) => bodyEntry(message, mode));
+  const body = [...others, ...later].map((message) => presentMessage(message, mode));
   if (first === undefined) {
-    return renderBody(body, mode);
+    return body;
   }
   const lead = {
     ...first,
@@ -317,10 +253,10 @@ function present(
           (mode === "system" && message.role === "system" && message.sections?.cwd !== undefined),
       );
     if (!keptStateDirectory) {
-      body.splice(others.length + keptEnd, 0, carried.update);
+      body.splice(others.length + keptEnd, 0, presentUpdate(carried.update, mode));
     }
   }
-  return [lead, ...renderBody(body, mode)];
+  return [lead, ...body];
 }
 
 /** The most recent context snapshot in the branch, if any. */

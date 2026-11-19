@@ -173,31 +173,6 @@ function item<T>(list: T[], index: number): T {
 const prefix = (previous: Message[], later = current()) =>
   assert.deepEqual(later.slice(0, previous.length), previous);
 
-async function bedrockTurns(transcript: Message[]): Promise<unknown[]> {
-  const models = aiProvidersAll.builtinModels();
-  let observed: unknown;
-  const reply = await models.completeSimple(
-    bedrock,
-    { messages: transcript },
-    {
-      apiKey: "fake-key-never-sent",
-      onPayload: (payload) => {
-        observed = payload;
-        throw new Error("captured Converse request without sending");
-      },
-    },
-  );
-  assert.match(reply.errorMessage ?? "", /captured Converse request without sending/);
-  assert.ok(
-    typeof observed === "object" &&
-      observed !== null &&
-      "messages" in observed &&
-      Array.isArray(observed.messages),
-  );
-  const turns: unknown[] = observed.messages;
-  return turns;
-}
-
 const factory: ExtensionFactory = (pi) => {
   pi.on("before_agent_start", (event) => {
     beforeStarts++;
@@ -1086,31 +1061,29 @@ try {
     fauxAssistantMessage("changed on Bedrock"),
   );
   await session.prompt("change to C on Bedrock");
-  const bedrockStart = leading(collapsed(item(requests, beforeBedrockChange)));
-  assert.equal(cwdOf(collapsed()), cwd);
-  assert.deepEqual(leading(collapsed()), bedrockStart);
-  const bedrockRequest = await bedrockTurns(current());
-  assert.equal(bedrockRequest.length, 3, "the prompt and tool result each carry their cwd update");
-  assert.partialDeepStrictEqual(bedrockRequest, [
-    {
-      role: "user",
-      content: [{ text: `<cwd>\n${next}\n</cwd>` }, { text: "change to C on Bedrock" }],
-    },
-    { role: "assistant" },
-    { role: "user", content: [{ toolResult: { content: [{ text: `<cwd>\n${third}\n</cwd>` }] } }] },
-  ]);
+  const bedrockStart = collapsed(item(requests, beforeBedrockChange));
+  assert.equal(cwdOf(bedrockStart), cwd);
+  assert.partialDeepStrictEqual(item(bedrockStart, 1), {
+    role: "user",
+    content: `<cwd>\n${next}\n</cwd>`,
+  });
+  const bedrockChanged = collapsed();
+  prefix(bedrockStart, bedrockChanged);
+  const lastToolResult = bedrockChanged.findLastIndex((message) => message.role === "toolResult");
+  assert.partialDeepStrictEqual(item(bedrockChanged, lastToolResult + 1), {
+    role: "user",
+    content: `<cwd>\n${third}\n</cwd>`,
+  });
   await session.compact();
   await session.prompt("continue on Bedrock after compaction");
-  assert.deepEqual(leading(collapsed()), bedrockStart);
-  const compactedBedrock = await bedrockTurns(current());
-  assert.partialDeepStrictEqual(item(compactedBedrock, 0), {
+  const compactedBedrock = collapsed();
+  assert.deepEqual(leading(compactedBedrock), leading(bedrockStart));
+  assert.partialDeepStrictEqual(item(compactedBedrock, 1), {
     role: "user",
-    content: [{ text: `<cwd>\n${third}\n</cwd>` }],
+    content: `<cwd>\n${third}\n</cwd>`,
   });
-  const firstBedrockTurn = item(compactedBedrock, 0);
-  assert.match(JSON.stringify(firstBedrockTurn), /Earlier work summarized\./);
   checks.push(
-    "Bedrock includes directory context in existing Converse turns, not extra user turns",
+    "Bedrock gets user-role directory updates and keeps its leading prompt through change_dir and compaction",
   );
 
   assert.deepEqual(errors, []);
