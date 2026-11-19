@@ -40,6 +40,8 @@ const {
   getCurrentSystemPrompt,
   getCurrentTools,
   createAssistantMessageEventStream,
+  collapseSystemMessages,
+  normalizeContext,
 } = ai;
 import { registerCwdContext } from "./cwd-context.ts";
 
@@ -59,6 +61,7 @@ globalThis.fetch = async () => {
   throw new Error("Context tests must not make network requests");
 };
 const model = structuredClone(aiProvidersAll.getBuiltinModel("openai", "gpt-6-astra"));
+const gemini = aiProvidersAll.getBuiltinModel("google", "gemini-4-argon");
 const selectedType = "test:selected-cwd",
   contextType = "change-working-dir:context";
 const fallbackNotice =
@@ -334,6 +337,10 @@ async function makeSession(
   };
   const credentials = AuthStorage.inMemory();
   await credentials.modify(model.provider, async () => ({
+    type: "api_key",
+    key: "fake-key-never-sent",
+  }));
+  await credentials.modify(gemini.provider, async () => ({
     type: "api_key",
     key: "fake-key-never-sent",
   }));
@@ -711,6 +718,19 @@ try {
     "the update from before the window is not sent after a newer one among the kept messages",
   );
   assert.equal(cwdOf(current()), third);
+  await session.setModel(gemini);
+  await session.prompt("switch to Gemini with the same kept messages");
+  assert.deepEqual(
+    current().flatMap((message) =>
+      message.role === "user" &&
+      typeof message.content === "string" &&
+      message.content.startsWith("<cwd>")
+        ? [message.content]
+        : [],
+    ),
+    [`<cwd>\n${third}\n</cwd>`],
+    "the kept update also replaces the carried update when projected as a user message",
+  );
   compactFrom = undefined;
   summaryBlockKept = undefined;
   checks.push(
@@ -947,6 +967,89 @@ try {
   checks.push(
     "native nested calls capture selected cwd and deny dependent work after a failed change",
   );
+
+  session.dispose();
+  manager.newSession();
+  session = await makeSession("startup", true);
+  await session.setModel(gemini);
+  await session.prompt("start in A on Gemini");
+  const collapsed = (prompt = current()) =>
+    collapseSystemMessages(normalizeContext({ messages: prompt })).messages;
+  const geminiStart = leading(collapsed());
+  assert.equal(cwdOf(collapsed()), cwd);
+  const geminiNativeCount = nativeSystems().length;
+  const beforeGeminiChange: number = requests.length;
+  responses.push(
+    fauxAssistantMessage(fauxToolCall("change_dir", { path: next }), { stopReason: "toolUse" }),
+    fauxAssistantMessage("changed on Gemini"),
+  );
+  await session.prompt("change to B on Gemini");
+  assert.equal(requests.length, beforeGeminiChange + 2);
+  assert.deepEqual(leading(collapsed()), geminiStart, "Gemini's collapsed prefix must not change");
+  prefix(collapsed(item(requests, beforeGeminiChange)), collapsed());
+  const geminiChanged = collapsed();
+  const updateAt = geminiChanged.findIndex(
+    (message) => message.role === "user" && message.content === `<cwd>\n${next}\n</cwd>`,
+  );
+  assert.ok(
+    updateAt > geminiChanged.findLastIndex((message) => message.role === "toolResult"),
+    "Gemini receives the new directory in place, after the tool result",
+  );
+  await session.prompt("continue on Gemini after the change");
+  assert.deepEqual(leading(collapsed()), geminiStart);
+  assert.equal(nativeSystems().length, geminiNativeCount, "Pi records no new native cwd delta");
+  prefix(geminiChanged, collapsed());
+
+  assert.equal(model.compat?.supportsMidConvoSystemMessages, true);
+  await session.setModel(model);
+  await session.prompt("switch to a model with mid-conversation system messages");
+  assert.deepEqual(cwdTrail(current()), [cwd, next]);
+  assert.equal(leading(current()).prompt, geminiStart.prompt);
+  await session.setModel(gemini);
+  await session.prompt("return to Gemini");
+  assert.deepEqual(leading(collapsed()), geminiStart);
+  prefix(geminiChanged, collapsed());
+  checks.push(
+    "Gemini keeps its exact collapsed prefix across change_dir and model switches; capable models get the same snapshot as a system delta",
+  );
+
+  // Journals written before the fix can have a native cwd patch alongside the saved snapshot.
+  manager.appendMessage({
+    role: "system",
+    content: "",
+    sections: { cwd: `<cwd>\n${next}\n</cwd>` },
+    timestamp: Date.now(),
+  });
+  session.dispose();
+  renameSync(next, hidden);
+  try {
+    session = await makeSession("resume", true);
+    await session.setModel(gemini);
+    await session.prompt("resume on Gemini with an unavailable directory");
+    const restore = snapshots().at(-1)?.details;
+    assert.ok(restore?.notice !== undefined && restore.notice !== "");
+    assert.equal(restore.cwd, cwd);
+    const restoreContext = `<cwd>\n${cwd}\n</cwd>\n\n<change-working-dir>\n${restore.notice}\n</change-working-dir>`;
+    assert.deepEqual(
+      leading(collapsed()),
+      geminiStart,
+      "the legacy patch does not reach the prefix",
+    );
+    assert.ok(
+      collapsed().some((message) => message.role === "user" && message.content === restoreContext),
+    );
+
+    manager.appendCompaction("", null, 100);
+    session.agent.state.messages = manager.buildSessionContext().messages;
+    await session.prompt("continue after compaction drops the restore snapshot");
+    assert.deepEqual(leading(collapsed()), geminiStart);
+    assert.partialDeepStrictEqual(item(collapsed(), 1), { role: "user", content: restoreContext });
+    checks.push(
+      "Gemini carries a restore notice across compaction without replaying old cwd patches",
+    );
+  } finally {
+    renameSync(hidden, next);
+  }
 
   assert.deepEqual(errors, []);
   console.log(
