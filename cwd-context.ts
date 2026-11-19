@@ -11,21 +11,22 @@ type Snapshot = { cwd: string; notice?: string | undefined };
 
 type Messages = ContextWithSystemEvent["messages"];
 
-type DirectoryUpdate = Extract<Messages[number], { role: "system" }>;
+type DirectoryUpdate = Snapshot & { timestamp: number };
+type Presentation = "system" | "user";
 
 /** What the journal says about the directory outside the messages of the current context window. */
 type Carried = {
-  /** The directory sections of the leading system message. They never change within a journal. */
-  leading: Record<string, string | null>;
+  /** The directory section of the first recorded system message, once one exists. */
+  start: string | undefined;
   /** The last directory update that a compaction removed from the window, if there is one. */
   update: DirectoryUpdate | undefined;
 };
 
-/** The carried sections and the journal prefix they were read from. */
+/** The carried state and the journal prefix it was read from. */
 type PrefixCache = {
   manager: ExtensionContext["sessionManager"];
   leaf: string | null;
-  sections: Carried;
+  carried: Carried;
 };
 
 /** Why a snapshot is recorded: a change is always new, a restore may repeat the journal. */
@@ -47,23 +48,49 @@ function snapshot(details: unknown): Snapshot | undefined {
   return { cwd, notice: typeof notice === "string" ? notice : undefined };
 }
 
+const CWD_OPEN = "<cwd>\n";
+const CWD_CLOSE = "\n</cwd>";
+
 /** The directory section as Pi records it in a system message. */
 function cwdSection(cwd: string): string {
-  return `<cwd>\n${cwd}\n</cwd>`;
+  return `${CWD_OPEN}${cwd}${CWD_CLOSE}`;
 }
 
-/** The system message that tells the model the directory and notice of a snapshot. */
-function directoryUpdate(state: Snapshot, timestamp: number): DirectoryUpdate {
+function presentationFor(model: ExtensionContext["model"]): Presentation {
+  if (
+    model === undefined ||
+    model.api === "google-generative-ai" ||
+    model.api === "google-vertex" ||
+    model.api === "bedrock-converse-stream"
+  ) {
+    return "user";
+  }
+  const { compat } = model;
+  return compat !== undefined &&
+    "supportsMidConvoSystemMessages" in compat &&
+    compat.supportsMidConvoSystemMessages === true
+    ? "system"
+    : "user";
+}
+
+function presentUpdate(
+  { cwd, notice, timestamp }: DirectoryUpdate,
+  mode: Presentation,
+): Messages[number] {
+  const directory = cwdSection(cwd);
+  const warning =
+    notice === undefined ? null : `<change-working-dir>\n${notice}\n</change-working-dir>`;
+  if (mode === "user") {
+    return {
+      role: "user",
+      content: warning === null ? directory : `${directory}\n\n${warning}`,
+      timestamp,
+    };
+  }
   return {
     role: "system",
     content: "",
-    sections: {
-      cwd: cwdSection(state.cwd),
-      "change-working-dir":
-        state.notice !== undefined
-          ? `<change-working-dir>\n${state.notice}\n</change-working-dir>`
-          : null,
-    },
+    sections: { cwd: directory, "change-working-dir": warning },
     timestamp,
   };
 }
@@ -74,7 +101,20 @@ function updateOf(message: Messages[number]): DirectoryUpdate | undefined {
     return;
   }
   const state = snapshot(message.details);
-  return state === undefined ? undefined : directoryUpdate(state, message.timestamp);
+  return state === undefined ? undefined : { ...state, timestamp: message.timestamp };
+}
+
+function presentMessage(message: Messages[number], mode: Presentation): Messages[number] {
+  const update = updateOf(message);
+  if (update !== undefined) {
+    return presentUpdate(update, mode);
+  }
+  if (mode !== "system" && message.role === "system" && message.sections?.cwd !== undefined) {
+    // Older journals contain native cwd patches as well as snapshots. Keep their other changes.
+    const { cwd: _cwd, ...sections } = message.sections;
+    return { ...message, sections };
+  }
+  return message;
 }
 
 /** Whether the ancestry from the leaf still reaches the prefix the cache was read from. */
@@ -95,14 +135,16 @@ function continues(cache: PrefixCache, ctx: ExtensionContext, leaf: string | nul
 }
 
 /**
- * The carried sections for this request. Only new ancestry is inspected: the journal is read
+ * The carried state for this request. Only new ancestry is inspected: the journal is read
  * again after a compaction, a branch change, or a restore, never on every provider request.
  */
 function refreshPrefix(cache: PrefixCache | undefined, ctx: ExtensionContext): PrefixCache {
   const leaf = ctx.sessionManager.getLeafId();
-  const sections =
-    cache !== undefined && continues(cache, ctx, leaf) ? cache.sections : carriedFrom(ctx);
-  return { manager: ctx.sessionManager, leaf, sections };
+  const carried =
+    cache?.carried.start !== undefined && continues(cache, ctx, leaf)
+      ? cache.carried
+      : carriedFrom(ctx);
+  return { manager: ctx.sessionManager, leaf, carried };
 }
 
 type Branch = ReturnType<ExtensionContext["sessionManager"]["getBranch"]>;
@@ -111,15 +153,15 @@ type Branch = ReturnType<ExtensionContext["sessionManager"]["getBranch"]>;
  * The directory section the journal started with: the one its first system message recorded.
  * It is read from the journal, not from this process, so a copy of the journal that runs in
  * another directory, such as a forked child session, starts from the same value as the original.
- * A journal without a recorded section started in the session directory.
+ * A journal whose first system message has no directory started in the session directory.
  */
-function startSection(branch: Branch, sessionCwd: string): string {
+function startSection(branch: Branch, sessionCwd: string): string | undefined {
   for (const entry of branch) {
     if (entry.type === "message" && entry.message.role === "system") {
       return entry.message.sections?.cwd ?? cwdSection(sessionCwd);
     }
   }
-  return cwdSection(sessionCwd);
+  return undefined;
 }
 
 /** The update of the last snapshot saved before the entry `cutoff`; of the whole branch when no entry was kept. */
@@ -131,7 +173,8 @@ function updateBefore(branch: Branch, cutoff: string | null): DirectoryUpdate | 
     }
     if (entry.type === "custom_message" && entry.customType === CONTEXT_TYPE) {
       const state = snapshot(entry.details);
-      earlier = state === undefined ? earlier : directoryUpdate(state, Date.parse(entry.timestamp));
+      earlier =
+        state === undefined ? earlier : { ...state, timestamp: Date.parse(entry.timestamp) };
     }
   }
   return earlier;
@@ -147,7 +190,7 @@ function carriedFrom(ctx: ExtensionContext): Carried {
   const branch = ctx.sessionManager.getBranch();
   const first = ctx.sessionManager.buildSessionProjection().entries[0]?.sourceEntry;
   return {
-    leading: { cwd: startSection(branch, ctx.cwd), "change-working-dir": null },
+    start: startSection(branch, ctx.cwd),
     update: first?.type === "compaction" ? updateBefore(branch, first.firstKeptEntryId) : undefined,
   };
 }
@@ -161,7 +204,7 @@ function startsWithSummaryBlock(first: object): boolean {
 }
 
 /**
- * Present the saved snapshots as system messages. A snapshot inside the conversation stays in its
+ * Present snapshots in the role the active model supports. A snapshot inside the conversation stays in its
  * place. The updates from before the conversation, carried over a compaction or saved before the
  * first prompt, go directly after the leading system messages: behind the prompt and the tool
  * changes a compaction keeps there, and in front of everything that changes with the window.
@@ -171,7 +214,12 @@ function startsWithSummaryBlock(first: object): boolean {
  * over that compaction goes behind them: directly after the compaction summary. A directory that
  * the kept turns state themselves is newer, so the carried update is then not sent.
  */
-function present(messages: Messages, carried: Carried): Messages {
+function present(
+  messages: Messages,
+  carried: Carried,
+  mode: Presentation,
+  sessionCwd: string,
+): Messages {
   const conversation = messages.findIndex(
     (message) => message.role !== "system" && updateOf(message) === undefined,
   );
@@ -180,31 +228,35 @@ function present(messages: Messages, carried: Carried): Messages {
   const later = [
     ...head.filter((message) => message.role !== "system"),
     ...messages.slice(head.length),
-  ].map((message) => updateOf(message) ?? message);
-  if (first === undefined) {
-    return later;
-  }
-  const lead = { ...first, sections: { ...first.sections, ...carried.leading } };
-  if (carried.update === undefined) {
-    return [lead, ...others, ...later];
-  }
-  if (!startsWithSummaryBlock(first)) {
-    return [lead, ...others, carried.update, ...later];
-  }
-  const kept = later.slice(
-    0,
-    later.findLastIndex((message) => message.role === "compactionSummary") + 1,
-  );
-  const keptStateDirectory = kept.some(
-    (message) => message.role === "system" && message.sections?.cwd !== undefined,
-  );
-  return [
-    lead,
-    ...others,
-    ...kept,
-    ...(keptStateDirectory ? [] : [carried.update]),
-    ...later.slice(kept.length),
   ];
+  const body = [...others, ...later].map((message) => presentMessage(message, mode));
+  if (first === undefined) {
+    return body;
+  }
+  const lead = {
+    ...first,
+    sections: {
+      ...first.sections,
+      cwd: carried.start ?? cwdSection(sessionCwd),
+      "change-working-dir": null,
+    },
+  };
+  if (carried.update !== undefined) {
+    const keptEnd = startsWithSummaryBlock(first)
+      ? later.findLastIndex((message) => message.role === "compactionSummary") + 1
+      : 0;
+    const keptStateDirectory = later
+      .slice(0, keptEnd)
+      .some(
+        (message) =>
+          updateOf(message) !== undefined ||
+          (mode === "system" && message.role === "system" && message.sections?.cwd !== undefined),
+      );
+    if (!keptStateDirectory) {
+      body.splice(others.length + keptEnd, 0, presentUpdate(carried.update, mode));
+    }
+  }
+  return [lead, ...body];
 }
 
 /** The most recent context snapshot in the branch, if any. */
@@ -242,8 +294,14 @@ export function registerCwdContext(
   let prefix: PrefixCache | undefined;
 
   pi.on("before_agent_start", (event, ctx) => {
+    const selected = currentCwd(ctx);
+    prefix = refreshPrefix(prefix, ctx);
+    const start = prefix.carried.start;
+    // Once Pi has recorded the leading section, later selections are snapshots only.
+    const initial = presentationFor(ctx.model) === "system" ? selected : ctx.cwd;
+    const cwd = start === undefined ? initial : start.slice(CWD_OPEN.length, -CWD_CLOSE.length);
     // oxlint-disable-next-line no-param-reassign -- QX-001: the host documents systemPromptOptions as mutable during this event.
-    event.systemPromptOptions.cwd = currentCwd(ctx);
+    event.systemPromptOptions.cwd = cwd;
     // The native cwd renderer replaces backslashes, including literal POSIX filename characters.
     // oxlint-disable-next-line no-param-reassign -- QX-001: the host documents systemPromptOptions as mutable during this event.
     event.systemPromptOptions.sections.cwd = event.systemPromptOptions.cwd;
@@ -251,14 +309,17 @@ export function registerCwdContext(
 
   pi.on("context_with_system", (event, ctx) => {
     prefix = refreshPrefix(prefix, ctx);
-    return { messages: present(event.messages, prefix.sections) };
+    return {
+      messages: present(event.messages, prefix.carried, presentationFor(ctx.model), ctx.cwd),
+    };
   });
 
   return (ctx, cwd, record) => {
     const notice = record.kind === "restore" ? record.notice : undefined;
     if (record.kind === "restore") {
       const branch = ctx.sessionManager.getBranch();
-      if (shouldSuppress(latestSnapshot(branch), cwd, notice, startSection(branch, ctx.cwd))) {
+      const start = startSection(branch, ctx.cwd) ?? cwdSection(ctx.cwd);
+      if (shouldSuppress(latestSnapshot(branch), cwd, notice, start)) {
         return;
       }
     }

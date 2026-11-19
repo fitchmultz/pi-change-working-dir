@@ -86,15 +86,20 @@ Pi has no checkpoint, Bash-cwd-hook, or file-publisher exports. Branch recovery 
 
 ## Model behavior
 
-`change_dir` is an ordinary strict-schema, sequential tool. It does not require Astra-only APIs, asynchronous tool jobs, or tool discovery. Structured context updates become native system deltas without mutating the journal.
+`change_dir` is an ordinary strict-schema, sequential tool. It does not require Astra-only APIs, asynchronous tool jobs, or tool discovery. The extension saves directory snapshots independently of the model.
+
+- Models that declare `supportsMidConvoSystemMessages: true` receive snapshots as system updates.
+- Gemini, Bedrock, and models without that flag receive snapshots as user-role context. This keeps the updates out of the leading prompt when Pi folds system messages together.
+
+Pi's Bedrock Converse adapter owns folding adjacent messages with the same role into one turn ([fitchmultz/pi#507](https://github.com/fitchmultz/pi/pull/507), PIF-220). Bedrock models that reject adjacent user turns require a Pi build containing that adapter fix (included in `fitchmultz/pi` from `09468c418`; official Pi 1.5.2 does not include it yet).
 
 The leading system message of every request states the directory that the journal's first system message recorded, before and after each compaction and whatever directory changes the session made. A provider can therefore still read the tool list and the prompt from its cache after a compaction. The model learns the selected directory and any notice from directory updates:
 
 - An update saved inside the context window is sent at its place in the conversation.
-- After a compaction, the last update from before the window is sent as one system message directly after the leading system messages: behind the prompt and, on the maintained fork, the tool changes that a compaction keeps there, and ahead of the summary and the kept messages. It keeps that place on every later request of the window.
+- After a compaction, the last update from before the window is sent directly after the leading system messages: behind the prompt and, on the maintained fork, the tool changes that a compaction keeps there, and ahead of the summary and the kept messages. It keeps that place on every later request of the window.
 - An update saved before the first prompt, for example by `/cwd`, goes to the same place.
 - After a compaction whose context starts with a provider summary block, the last update from before the window is sent directly after the compaction summary, behind the kept messages. The maintained fork starts the context that way when an extension compaction asked for a block. The provider keeps the reasoning of the kept messages only while they follow the block directly, so nothing may stand between them. When the kept messages hold a directory update of their own, that newer update is the one in effect and the older one is not sent.
 
-A session started from a copy of another journal in a different directory, such as a context-forked child, therefore sends the original's leading system message unchanged and saves its own directory as a later update. On a model or provider without mid-conversation system messages, Pi folds all system messages into one prompt that states the selected directory; that prompt changes with each directory change.
+A session started from a copy of another journal in a different directory, such as a context-forked child, keeps the original directory in the leading system message and sends its own directory as a later update. Switching models reprojects the same saved snapshots in the role the new model supports. On models that fold system messages into the leading prompt, old native directory patches are left out of the request so they cannot overwrite the starting directory.
 
 The journal is read for this only after a compaction, a branch change, or a restore; ordinary requests inspect only newly appended ancestry. Legacy saved presentation snapshots remain readable. Provider configuration and other extensions' whole-prompt overrides can affect caching; this package does not change them or promise a particular cache hit rate.
