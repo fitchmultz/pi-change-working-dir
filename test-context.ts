@@ -62,6 +62,7 @@ globalThis.fetch = async () => {
 };
 const model = structuredClone(aiProvidersAll.getBuiltinModel("openai", "gpt-6-astra"));
 const gemini = aiProvidersAll.getBuiltinModel("google", "gemini-4-argon");
+const bedrock = aiProvidersAll.getBuiltinModel("amazon-bedrock", "anthropic.claude-sonnet-4-6");
 const selectedType = "test:selected-cwd",
   contextType = "change-working-dir:context";
 const fallbackNotice =
@@ -171,6 +172,31 @@ function item<T>(list: T[], index: number): T {
 }
 const prefix = (previous: Message[], later = current()) =>
   assert.deepEqual(later.slice(0, previous.length), previous);
+
+async function bedrockTurns(transcript: Message[]): Promise<unknown[]> {
+  const models = aiProvidersAll.builtinModels();
+  let observed: unknown;
+  const reply = await models.completeSimple(
+    bedrock,
+    { messages: transcript },
+    {
+      apiKey: "fake-key-never-sent",
+      onPayload: (payload) => {
+        observed = payload;
+        throw new Error("captured Converse request without sending");
+      },
+    },
+  );
+  assert.match(reply.errorMessage ?? "", /captured Converse request without sending/);
+  assert.ok(
+    typeof observed === "object" &&
+      observed !== null &&
+      "messages" in observed &&
+      Array.isArray(observed.messages),
+  );
+  const turns: unknown[] = observed.messages;
+  return turns;
+}
 
 const factory: ExtensionFactory = (pi) => {
   pi.on("before_agent_start", (event) => {
@@ -336,14 +362,12 @@ async function makeSession(
     async reload() {},
   };
   const credentials = AuthStorage.inMemory();
-  await credentials.modify(model.provider, async () => ({
-    type: "api_key",
-    key: "fake-key-never-sent",
-  }));
-  await credentials.modify(gemini.provider, async () => ({
-    type: "api_key",
-    key: "fake-key-never-sent",
-  }));
+  for (const { provider } of [model, gemini, bedrock]) {
+    await credentials.modify(provider, async () => ({
+      type: "api_key",
+      key: "fake-key-never-sent",
+    }));
+  }
   const modelRuntime = await ModelRuntime.create({
     credentials,
     modelsPath: null,
@@ -1050,6 +1074,44 @@ try {
   } finally {
     renameSync(hidden, next);
   }
+
+  session.dispose();
+  manager.newSession();
+  session = await makeSession();
+  await session.setModel(bedrock);
+  await session.prompt(`/cwd ${next}`);
+  const beforeBedrockChange: number = requests.length;
+  responses.push(
+    fauxAssistantMessage(fauxToolCall("change_dir", { path: third }), { stopReason: "toolUse" }),
+    fauxAssistantMessage("changed on Bedrock"),
+  );
+  await session.prompt("change to C on Bedrock");
+  const bedrockStart = leading(collapsed(item(requests, beforeBedrockChange)));
+  assert.equal(cwdOf(collapsed()), cwd);
+  assert.deepEqual(leading(collapsed()), bedrockStart);
+  const bedrockRequest = await bedrockTurns(current());
+  assert.equal(bedrockRequest.length, 3, "the prompt and tool result each carry their cwd update");
+  assert.partialDeepStrictEqual(bedrockRequest, [
+    {
+      role: "user",
+      content: [{ text: `<cwd>\n${next}\n</cwd>` }, { text: "change to C on Bedrock" }],
+    },
+    { role: "assistant" },
+    { role: "user", content: [{ toolResult: { content: [{ text: `<cwd>\n${third}\n</cwd>` }] } }] },
+  ]);
+  await session.compact();
+  await session.prompt("continue on Bedrock after compaction");
+  assert.deepEqual(leading(collapsed()), bedrockStart);
+  const compactedBedrock = await bedrockTurns(current());
+  assert.partialDeepStrictEqual(item(compactedBedrock, 0), {
+    role: "user",
+    content: [{ text: `<cwd>\n${third}\n</cwd>` }],
+  });
+  const firstBedrockTurn = item(compactedBedrock, 0);
+  assert.match(JSON.stringify(firstBedrockTurn), /Earlier work summarized\./);
+  checks.push(
+    "Bedrock includes directory context in existing Converse turns, not extra user turns",
+  );
 
   assert.deepEqual(errors, []);
   console.log(
