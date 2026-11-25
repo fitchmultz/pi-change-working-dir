@@ -1004,12 +1004,20 @@ try {
   await session.prompt("switch to a model with mid-conversation system messages");
   assert.deepEqual(cwdTrail(current()), [cwd, next]);
   assert.equal(leading(current()).prompt, geminiStart.prompt);
-  await session.setModel(gemini);
-  await session.prompt("return to Gemini");
-  assert.deepEqual(leading(collapsed()), geminiStart);
+  await session.setModel({
+    ...gemini,
+    api: "google-interactions",
+    compat: { supportsMidConvoSystemMessages: true },
+  });
+  await session.prompt("return to Gemini through google-interactions");
+  assert.deepEqual(
+    leading(collapsed()),
+    geminiStart,
+    "google-interactions keeps the leading prompt",
+  );
   prefix(geminiChanged, collapsed());
   checks.push(
-    "Gemini keeps its exact collapsed prefix across change_dir and model switches; capable models get the same snapshot as a system delta",
+    "Gemini keeps its exact collapsed prefix across change_dir and a switch to google-interactions; capable models get the same snapshot as a system delta",
   );
 
   // Journals written before the fix can have a native cwd patch alongside the saved snapshot.

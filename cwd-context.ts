@@ -60,6 +60,7 @@ function presentationFor(model: ExtensionContext["model"]): Presentation {
   if (
     model === undefined ||
     model.api === "google-generative-ai" ||
+    model.api === "google-interactions" ||
     model.api === "google-vertex" ||
     model.api === "bedrock-converse-stream"
   ) {
