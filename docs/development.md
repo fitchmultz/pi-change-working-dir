@@ -4,7 +4,7 @@ For installation and everyday use, see the [README](../README.md). The [referenc
 
 ## Local development
 
-Requires Node.js 24.22.3 (24.x) or 26.13.1 and later and Pi 1.6.0 or later. Development dependencies currently use official Pi 1.6.0 and TypeBox 1.3.27; [`package.json`](../package.json) is the source of truth for the exact versions. Distribution is Git/GitHub only, not npm.
+Requires Node.js 24.22.3 (24.x) or 26.13.1 and later and Pi 1.6.1 or later. Development dependencies currently use official Pi 1.6.1 and TypeBox 1.3.27; [`package.json`](../package.json) is the source of truth for the exact versions. Distribution is Git/GitHub only, not npm.
 
 ```sh
 npm ci --ignore-scripts
