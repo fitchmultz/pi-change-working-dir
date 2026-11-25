@@ -88,8 +88,8 @@ Pi has no checkpoint, Bash-cwd-hook, or file-publisher exports. Branch recovery 
 
 `change_dir` is an ordinary strict-schema, sequential tool. It does not require Astra-only APIs, asynchronous tool jobs, or tool discovery. The extension saves directory snapshots independently of the model.
 
-- Models that declare `supportsMidConvoSystemMessages: true` receive snapshots as system updates.
-- Gemini, Bedrock, and models without that flag receive snapshots as user-role context. This keeps the updates out of the leading prompt when Pi folds system messages together.
+- The `google-generative-ai`, `google-interactions`, `google-vertex`, and `bedrock-converse-stream` APIs always receive snapshots as user-role context. This keeps the updates out of the leading prompt when Pi folds system messages together.
+- Other models receive snapshots as system updates only if they declare `supportsMidConvoSystemMessages: true`. Otherwise, they receive snapshots as user-role context.
 
 Pi's Bedrock Converse adapter owns folding adjacent messages with the same role into one turn ([fitchmultz/pi#507](https://github.com/fitchmultz/pi/pull/507), PIF-220). Bedrock models that reject adjacent user turns require a Pi build containing that adapter fix (included in `fitchmultz/pi` from `09468c418`; official Pi 1.6.1 still sends adjacent user turns separately).
 
