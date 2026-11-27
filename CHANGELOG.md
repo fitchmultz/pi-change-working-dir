@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Raise the tested Pi floor to 1.6.1.
+- Raise the tested Pi floor to 1.7.0.
 - Preserve the leading prompt when `change_dir` runs on Gemini, Bedrock, or another model that folds system messages into the prompt. Send directory changes and restore notices in place as user-role context on those models, and keep system updates on models that support them.
 - Raise the Pi floor to 1.5.2 and use Node 24 built-ins (`posix.matchesGlob`, `crypto.hash`, and `util.parseArgs`) in `scripts/check-policy.ts`.
 - Keep the kept reasoning across a compaction with a provider summary block after a directory change. On a host that starts the compacted context with such a block, the directory update carried over the compaction stood between the block and the kept messages, and Anthropic then dropped every thinking block of the kept turns (measured with `claude-fable-5-2`: 2 of 2 and 4 of 4 after two compactions). With a block the update now follows the compaction summary. A context without a block is unchanged.
